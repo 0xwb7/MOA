@@ -1,4 +1,4 @@
-package discord.moa.discordmoa.domain.discord.listener;
+package discord.moa.discordmoa.discord.listener;
 
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
