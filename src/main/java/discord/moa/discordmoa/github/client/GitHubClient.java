@@ -1,13 +1,20 @@
 package discord.moa.discordmoa.github.client;
 
+import discord.moa.discordmoa.github.dto.GitHubCommit;
+import discord.moa.discordmoa.github.dto.GitHubCommitPage;
+import discord.moa.discordmoa.github.dto.GitHubCompare;
 import discord.moa.discordmoa.github.dto.GitHubInstallation;
 import discord.moa.discordmoa.github.dto.GitHubRepo;
 import discord.moa.discordmoa.github.dto.GitHubUser;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
+import java.util.List;
 import java.util.Optional;
 
 @Component
@@ -70,5 +77,52 @@ public class GitHubClient {
         } catch (HttpClientErrorException.Conflict e) {
             return Optional.empty();
         }
+    }
+
+    public Optional<GitHubCompare> compare(Long installationId, String owner, String repo, String base, String head) {
+        try {
+            return Optional.ofNullable(
+                    restClient.get()
+                            .uri("/repos/{owner}/{repo}/compare/{base}...{head}", owner, repo, base, head)
+                            .headers(headers -> GitHubHeaders.apply(headers, tokenProvider.getInstallationToken(installationId), GitHubHeaders.JSON))
+                            .retrieve()
+                            .body(GitHubCompare.class)
+            );
+        } catch (HttpClientErrorException.NotFound e) {
+            return Optional.empty();
+        }
+    }
+
+    public GitHubCommitPage listCommits(Long installationId, String owner, String repo, String sha, int perPage) {
+        try {
+            ResponseEntity<List<GitHubCommit>> response = restClient.get()
+                    .uri(builder -> builder.path("/repos/{owner}/{repo}/commits")
+                            .queryParam("sha", sha)
+                            .queryParam("per_page", perPage)
+                            .build(owner, repo))
+                    .headers(headers -> GitHubHeaders.apply(headers, tokenProvider.getInstallationToken(installationId), GitHubHeaders.JSON))
+                    .retrieve()
+                    .toEntity(new ParameterizedTypeReference<>() {
+                    });
+
+            List<GitHubCommit> commits = response.getBody() == null ? List.of() : response.getBody();
+            String link = response.getHeaders().getFirst(HttpHeaders.LINK);
+            return new GitHubCommitPage(commits, link != null && link.contains("rel=\"next\""));
+        } catch (HttpClientErrorException.Conflict e) {
+            return new GitHubCommitPage(List.of(), false);
+        }
+    }
+
+    public GitHubCommit findCommit(Long installationId, String owner, String repo, String sha) {
+        GitHubCommit commit = restClient.get()
+                .uri("/repos/{owner}/{repo}/commits/{sha}", owner, repo, sha)
+                .headers(headers -> GitHubHeaders.apply(headers, tokenProvider.getInstallationToken(installationId), GitHubHeaders.JSON))
+                .retrieve()
+                .body(GitHubCommit.class);
+
+        if (commit == null) {
+            throw new IllegalStateException("GitHub 커밋 상세 응답이 비어 있어요: " + owner + "/" + repo + "@" + sha);
+        }
+        return commit;
     }
 }

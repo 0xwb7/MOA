@@ -1,6 +1,9 @@
 package discord.moa.discordmoa.discord.listener;
 
 import discord.moa.discordmoa.domain.account.service.AccountLinkService;
+import discord.moa.discordmoa.domain.collect.service.ChangeCollector;
+import discord.moa.discordmoa.domain.collect.service.RepoCollectResult;
+import discord.moa.discordmoa.domain.collect.service.TeamCollectResult;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.domain.team.service.TeamService;
 import discord.moa.discordmoa.domain.team.service.TrackedRepoService;
@@ -19,6 +22,7 @@ public class SlashCommandListener extends ListenerAdapter {
     private final AccountLinkService accountLinkService;
     private final TeamService teamService;
     private final TrackedRepoService trackedRepoService;
+    private final ChangeCollector changeCollector;
 
     @Override
     public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
@@ -27,6 +31,7 @@ public class SlashCommandListener extends ListenerAdapter {
             case "연동" -> handleLink(event);
             case "팀등록" -> handleTeamRegister(event);
             case "레포등록" -> handleRepoRegister(event);
+            case "수집테스트" -> handleCollectTest(event);
             default -> event.reply("알 수 없는 명령어예요.").setEphemeral(true).queue();
         }
     }
@@ -77,5 +82,37 @@ public class SlashCommandListener extends ListenerAdapter {
             log.warn("레포 등록 중 GitHub API 호출 실패: url={}", url, e);
             event.getHook().sendMessage("⚠️ GitHub와 통신하는 중 문제가 생겼어요. 잠시 후 다시 시도해 주세요.").queue();
         }
+    }
+
+    private void handleCollectTest(SlashCommandInteractionEvent event) {
+        event.deferReply(true).queue();
+
+        try {
+            TeamCollectResult result = changeCollector.collectTeamByChannel(event.getChannel().getIdLong());
+            if (result.repos().isEmpty()) {
+                event.getHook().sendMessage("⚠️ '" + result.teamName() + "' 팀에 등록된 레포가 없어요. /레포등록 으로 먼저 등록해 주세요.").queue();
+                return;
+            }
+
+            StringBuilder message = new StringBuilder("✅ '" + result.teamName() + "' 팀 수집 결과\n");
+            result.repos().forEach(repo -> message.append("• ").append(describe(repo)).append('\n'));
+            event.getHook().sendMessage(message.toString()).queue();
+        } catch (IllegalStateException e) {
+            event.getHook().sendMessage("⚠️ " + e.getMessage()).queue();
+        }
+    }
+
+    private String describe(RepoCollectResult repo) {
+        return switch (repo.outcome()) {
+            case COLLECTED -> repo.repoFullName() + ": 커밋 " + repo.commitCount() + "개, 파일 " + repo.fileCount() + "개"
+                    + " | force push " + yesNo(repo.forcePushDetected())
+                    + " | 잘림 " + yesNo(repo.truncated());
+            case NO_CHANGE -> repo.repoFullName() + ": 변경 없음";
+            case FAILED -> repo.repoFullName() + ": ❌ 수집 실패 (서버 로그를 확인해 주세요)";
+        };
+    }
+
+    private String yesNo(boolean value) {
+        return value ? "예" : "아니요";
     }
 }

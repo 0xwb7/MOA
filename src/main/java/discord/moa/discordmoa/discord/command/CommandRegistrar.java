@@ -27,7 +27,10 @@ public class CommandRegistrar {
                                 .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER)),
 
                         Commands.slash("레포등록", "팀 GitHub 레포를 등록해요 (팀 채팅방에서 실행)")
-                                .addOption(OptionType.STRING, "url", "레포 주소 (예: https://github.com/owner/repo)", true)
+                                .addOption(OptionType.STRING, "url", "레포 주소 (예: https://github.com/owner/repo)", true),
+
+                        Commands.slash("수집테스트", "이 채널 팀의 레포 변경을 지금 수집해요 (운영진 전용)")
+                                .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER))
                 )
                 .queue();
     }
