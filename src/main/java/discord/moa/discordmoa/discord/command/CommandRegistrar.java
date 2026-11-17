@@ -1,4 +1,4 @@
-package discord.moa.discordmoa.domain.discord.command;
+package discord.moa.discordmoa.discord.command;
 
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.Permission;
@@ -24,7 +24,10 @@ public class CommandRegistrar {
                                 .addOption(OptionType.STRING, "name", "팀 이름", true)
                                 .addOption(OptionType.CHANNEL, "channel", "팀 채팅방", true)
                                 .addOption(OptionType.USER, "pm", "팀 PM", true)
-                                .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER))
+                                .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER)),
+
+                        Commands.slash("레포등록", "팀 GitHub 레포를 등록해요 (팀 채팅방에서 실행)")
+                                .addOption(OptionType.STRING, "url", "레포 주소 (예: https://github.com/owner/repo)", true)
                 )
                 .queue();
     }

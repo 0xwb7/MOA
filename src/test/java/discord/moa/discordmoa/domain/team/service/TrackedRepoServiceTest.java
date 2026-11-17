@@ -1,0 +1,171 @@
+package discord.moa.discordmoa.domain.team.service;
+
+import discord.moa.discordmoa.domain.team.entity.Team;
+import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
+import discord.moa.discordmoa.domain.team.repository.TeamRepository;
+import discord.moa.discordmoa.domain.team.repository.TrackedRepoRepository;
+import discord.moa.discordmoa.github.client.GitHubClient;
+import discord.moa.discordmoa.github.dto.GitHubRepo;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
+
+import java.util.Optional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+
+@ExtendWith(MockitoExtension.class)
+class TrackedRepoServiceTest {
+
+    private static final Long CHANNEL_ID = 100L;
+    private static final Long INSTALLATION_ID = 555L;
+    private static final String INSTALL_URL = "https://github.com/apps/moa-test/installations/new";
+    private static final String URL = "https://github.com/owner/repo";
+    private static final GitHubRepo GITHUB_REPO = new GitHubRepo(42L, "owner/repo", "main");
+    private static final String SHA = "a".repeat(40);
+
+    @Mock
+    private TrackedRepoRepository trackedRepoRepository;
+    @Mock
+    private TeamRepository teamRepository;
+    @Mock
+    private GitHubClient gitHubClient;
+
+    private TrackedRepoService service;
+    private Team team;
+
+    @BeforeEach
+    void setUp() {
+        service = new TrackedRepoService(trackedRepoRepository, teamRepository, gitHubClient, INSTALL_URL);
+        team = new Team("모아팀", CHANNEL_ID, 1L);
+    }
+
+    @Test
+    void 정상_등록하면_설치ID와_기본브랜치_최신SHA를_저장한다() {
+        givenTeamChannel();
+        givenInstalledRepo();
+        given(trackedRepoRepository.existsByGithubRepoId(42L)).willReturn(false);
+        given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "repo", "main")).willReturn(Optional.of(SHA));
+        given(trackedRepoRepository.save(any(TrackedRepo.class))).willAnswer(inv -> inv.getArgument(0));
+
+        TrackedRepo result = service.register(CHANNEL_ID, URL);
+
+        ArgumentCaptor<TrackedRepo> captor = ArgumentCaptor.forClass(TrackedRepo.class);
+        verify(trackedRepoRepository).save(captor.capture());
+        TrackedRepo saved = captor.getValue();
+        assertThat(saved.getTeam()).isSameAs(team);
+        assertThat(saved.getGithubRepoId()).isEqualTo(42L);
+        assertThat(saved.getFullName()).isEqualTo("owner/repo");
+        assertThat(saved.getDefaultBranch()).isEqualTo("main");
+        assertThat(saved.getLastProcessedSha()).isEqualTo(SHA);
+        assertThat(saved.getInstallationId()).isEqualTo(INSTALLATION_ID);
+        assertThat(result).isSameAs(saved);
+    }
+
+    @Test
+    void 팀_채널이_아니면_GitHub를_호출하지_않고_거절한다() {
+        given(teamRepository.findByDiscordChannelId(CHANNEL_ID)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.register(CHANNEL_ID, URL))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("팀 채팅방");
+
+        verifyNoInteractions(gitHubClient, trackedRepoRepository);
+    }
+
+    @Test
+    void 주소_형식이_틀리면_GitHub를_호출하지_않고_거절한다() {
+        givenTeamChannel();
+
+        assertThatThrownBy(() -> service.register(CHANNEL_ID, "https://gitlab.com/owner/repo"))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        verifyNoInteractions(gitHubClient, trackedRepoRepository);
+    }
+
+    @Test
+    void App이_설치되지_않았으면_설치_링크와_함께_거절한다() {
+        givenTeamChannel();
+        given(gitHubClient.findInstallationId("owner", "repo")).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.register(CHANNEL_ID, URL))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(INSTALL_URL)
+                .hasMessageContaining("owner/repo");
+
+        verify(trackedRepoRepository, never()).save(any());
+    }
+
+    @Test
+    void 설치는_됐지만_레포_접근_권한이_없으면_설치_링크와_함께_거절한다() {
+        givenTeamChannel();
+        given(gitHubClient.findInstallationId("owner", "repo")).willReturn(Optional.of(INSTALLATION_ID));
+        given(gitHubClient.findRepo(INSTALLATION_ID, "owner", "repo")).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.register(CHANNEL_ID, URL))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(INSTALL_URL);
+
+        verify(trackedRepoRepository, never()).save(any());
+    }
+
+    @Test
+    void 이미_등록된_레포는_거절한다() {
+        givenTeamChannel();
+        givenInstalledRepo();
+        given(trackedRepoRepository.existsByGithubRepoId(42L)).willReturn(true);
+
+        assertThatThrownBy(() -> service.register(CHANNEL_ID, URL))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("이미 등록된 레포");
+
+        verify(trackedRepoRepository, never()).save(any());
+    }
+
+    @Test
+    void 동시_등록으로_unique_제약에_걸리면_중복_등록으로_안내한다() {
+        givenTeamChannel();
+        givenInstalledRepo();
+        given(trackedRepoRepository.existsByGithubRepoId(42L)).willReturn(false);
+        given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "repo", "main")).willReturn(Optional.of(SHA));
+        given(trackedRepoRepository.save(any(TrackedRepo.class)))
+                .willThrow(new DataIntegrityViolationException("duplicate"));
+
+        assertThatThrownBy(() -> service.register(CHANNEL_ID, URL))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("이미 등록된 레포");
+    }
+
+    @Test
+    void 커밋이_없는_빈_레포는_SHA_null로_등록에_성공한다() {
+        givenTeamChannel();
+        givenInstalledRepo();
+        given(trackedRepoRepository.existsByGithubRepoId(42L)).willReturn(false);
+        given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "repo", "main")).willReturn(Optional.empty());
+        given(trackedRepoRepository.save(any(TrackedRepo.class))).willAnswer(inv -> inv.getArgument(0));
+
+        TrackedRepo result = service.register(CHANNEL_ID, URL);
+
+        assertThat(result.getLastProcessedSha()).isNull();
+        assertThat(result.getGithubRepoId()).isEqualTo(42L);
+    }
+
+    private void givenTeamChannel() {
+        given(teamRepository.findByDiscordChannelId(CHANNEL_ID)).willReturn(Optional.of(team));
+    }
+
+    private void givenInstalledRepo() {
+        given(gitHubClient.findInstallationId("owner", "repo")).willReturn(Optional.of(INSTALLATION_ID));
+        given(gitHubClient.findRepo(INSTALLATION_ID, "owner", "repo")).willReturn(Optional.of(GITHUB_REPO));
+    }
+}
