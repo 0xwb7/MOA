@@ -4,6 +4,9 @@ import discord.moa.discordmoa.domain.account.service.AccountLinkService;
 import discord.moa.discordmoa.domain.collect.service.ChangeCollector;
 import discord.moa.discordmoa.domain.collect.service.RepoCollectResult;
 import discord.moa.discordmoa.domain.collect.service.TeamCollectResult;
+import discord.moa.discordmoa.domain.digest.entity.DigestType;
+import discord.moa.discordmoa.domain.digest.service.DigestSendResult;
+import discord.moa.discordmoa.domain.digest.service.DigestService;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.domain.team.service.TeamService;
 import discord.moa.discordmoa.domain.team.service.TrackedRepoService;
@@ -23,6 +26,7 @@ public class SlashCommandListener extends ListenerAdapter {
     private final TeamService teamService;
     private final TrackedRepoService trackedRepoService;
     private final ChangeCollector changeCollector;
+    private final DigestService digestService;
 
     @Override
     public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
@@ -32,6 +36,7 @@ public class SlashCommandListener extends ListenerAdapter {
             case "팀등록" -> handleTeamRegister(event);
             case "레포등록" -> handleRepoRegister(event);
             case "수집테스트" -> handleCollectTest(event);
+            case "발송테스트" -> handleSendTest(event);
             default -> event.reply("알 수 없는 명령어예요.").setEphemeral(true).queue();
         }
     }
@@ -100,6 +105,36 @@ public class SlashCommandListener extends ListenerAdapter {
         } catch (IllegalStateException e) {
             event.getHook().sendMessage("⚠️ " + e.getMessage()).queue();
         }
+    }
+
+    private void handleSendTest(SlashCommandInteractionEvent event) {
+        event.deferReply(true).queue();
+
+        long channelId = event.getChannel().getIdLong();
+        try {
+            TeamCollectResult collected = changeCollector.collectTeamByChannel(channelId);
+            DigestSendResult sent = digestService.sendTeamByChannel(channelId);
+
+            StringBuilder message = new StringBuilder("'" + collected.teamName() + "' 팀 수집 결과\n");
+            collected.repos().forEach(repo -> message.append("• ").append(describe(repo)).append('\n'));
+            message.append('\n').append(describeSend(sent));
+            event.getHook().sendMessage(message.toString()).queue();
+        } catch (IllegalStateException e) {
+            event.getHook().sendMessage("⚠️ " + e.getMessage()).queue();
+        } catch (RuntimeException e) {
+            log.error("발송 테스트 중 오류: channelId={}", channelId, e);
+            event.getHook().sendMessage("⚠️ 발송 중 문제가 생겼어요. 서버 로그를 확인해 주세요.").queue();
+        }
+    }
+
+    private String describeSend(DigestSendResult result) {
+        if (!result.sent()) {
+            return "⚠️ 발송 실패: " + result.failureReason();
+        }
+        if (result.type() == DigestType.NO_CHANGE) {
+            return "✅ 변경이 없어 '변경 사항이 없어요' 안내를 보냈어요.";
+        }
+        return "✅ 발송 완료: 항목 " + result.itemCount() + "개, 메시지 " + result.messageCount() + "개";
     }
 
     private String describe(RepoCollectResult repo) {

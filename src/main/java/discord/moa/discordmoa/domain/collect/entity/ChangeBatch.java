@@ -1,5 +1,6 @@
 package discord.moa.discordmoa.domain.collect.entity;
 
+import discord.moa.discordmoa.domain.digest.entity.DigestItem;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -60,6 +61,10 @@ public class ChangeBatch {
     @Column(nullable = false)
     private List<FileChange> files;
 
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "digest_item_id")
+    private DigestItem digestItem;
+
     public ChangeBatch(TrackedRepo trackedRepo, String baseSha, String headSha, Instant collectedAt,
                        boolean forcePushDetected, boolean truncated,
                        List<CommitSnapshot> commits, List<FileChange> files) {
@@ -72,5 +77,10 @@ public class ChangeBatch {
         this.truncated = truncated;
         this.commits = commits;
         this.files = files;
+    }
+
+    public void markSent(DigestItem digestItem) {
+        this.status = ChangeBatchStatus.SENT;
+        this.digestItem = digestItem;
     }
 }
