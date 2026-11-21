@@ -1,6 +1,7 @@
 discord:
   token: ${DISCORD_BOT_TOKEN}
   test-guild-id: ${DISCORD_TEST_GUILD_ID}
+  digest-buttons-enabled: false   # 확인/질문 버튼 기능이 준비되면 true
 
 spring:
   datasource:

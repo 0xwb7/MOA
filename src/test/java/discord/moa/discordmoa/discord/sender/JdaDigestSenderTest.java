@@ -15,6 +15,7 @@ import net.dv8tion.jda.api.entities.channel.middleman.GuildMessageChannel;
 import net.dv8tion.jda.api.requests.restaction.MessageCreateAction;
 import net.dv8tion.jda.api.utils.messages.MessageCreateData;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.util.List;
 
@@ -34,7 +35,7 @@ class JdaDigestSenderTest {
 
     @Test
     void Components_V2로_항목마다_텍스트_바로_아래에_버튼_두_개를_붙인다() {
-        MessageCreateData data = JdaDigestSender.toMessageData(FIRST);
+        MessageCreateData data = JdaDigestSender.toMessageData(FIRST, true);
 
         assertThat(data.isUsingComponentsV2()).isTrue();
         assertThat(data.getContent()).isEmpty();
@@ -55,10 +56,40 @@ class JdaDigestSenderTest {
     }
 
     @Test
+    void 버튼_설정이_꺼져_있으면_항목_텍스트만_보내고_버튼은_붙이지_않는다() {
+        MessageCreateData data = JdaDigestSender.toMessageData(FIRST, false);
+
+        assertThat(data.isUsingComponentsV2()).isTrue();
+        assertThat(data.getComponents()).extracting(Component::getType).containsExactly(
+                Component.Type.TEXT_DISPLAY,
+                Component.Type.SEPARATOR, Component.Type.TEXT_DISPLAY,
+                Component.Type.SEPARATOR, Component.Type.TEXT_DISPLAY);
+        assertThat(data.getComponents()).extracting(Component::getType).doesNotContain(Component.Type.ACTION_ROW);
+        assertThat(data.getComponents().get(2).asTextDisplay().getContent()).isEqualTo("📦 owner/a (커밋 1개)");
+        assertThat(data.getMentionedUsers()).containsExactly("7");
+    }
+
+    @Test
+    void 버튼_설정이_꺼져_있으면_실제_발송에도_버튼이_없다() {
+        GuildMessageChannel channel = channelWithPermissions(true, true);
+        Message sent = mock(Message.class);
+        given(sent.getIdLong()).willReturn(9001L);
+        MessageCreateAction ok = mock(MessageCreateAction.class);
+        given(ok.complete()).willReturn(sent);
+        ArgumentCaptor<MessageCreateData> captor = ArgumentCaptor.forClass(MessageCreateData.class);
+        given(channel.sendMessage(captor.capture())).willReturn(ok);
+
+        new JdaDigestSender(jdaReturning(channel), false).send(100L, List.of(FIRST));
+
+        assertThat(captor.getValue().getComponents()).extracting(Component::getType)
+                .doesNotContain(Component.Type.ACTION_ROW);
+    }
+
+    @Test
     void PM만_멘션을_허용하고_나머지_멘션은_막는다() {
-        MessageCreateData withMention = JdaDigestSender.toMessageData(FIRST);
+        MessageCreateData withMention = JdaDigestSender.toMessageData(FIRST, true);
         MessageCreateData withoutMention = JdaDigestSender.toMessageData(
-                new DigestMessage(null, List.of(DigestBlock.item(13L, "@everyone 커밋"))));
+                new DigestMessage(null, List.of(DigestBlock.item(13L, "@everyone 커밋"))), true);
 
         assertThat(withMention.getAllowedMentions()).isEmpty();
         assertThat(withMention.getMentionedUsers()).containsExactly("7");
@@ -69,7 +100,7 @@ class JdaDigestSenderTest {
     @Test
     void 채널을_찾을_수_없으면_원인을_담아_실패한다() {
         JDA jda = mock(JDA.class);
-        JdaDigestSender sender = new JdaDigestSender(jda);
+        JdaDigestSender sender = new JdaDigestSender(jda, true);
 
         assertThatThrownBy(() -> sender.send(100L, List.of(FIRST)))
                 .isInstanceOf(DigestSendException.class)
@@ -79,7 +110,7 @@ class JdaDigestSenderTest {
     @Test
     void 메시지_보내기_권한이_없으면_보내지_않고_원인을_담아_실패한다() {
         GuildMessageChannel channel = channelWithPermissions(true, false);
-        JdaDigestSender sender = new JdaDigestSender(jdaReturning(channel));
+        JdaDigestSender sender = new JdaDigestSender(jdaReturning(channel), true);
 
         assertThatThrownBy(() -> sender.send(100L, List.of(FIRST)))
                 .isInstanceOf(DigestSendException.class)
@@ -96,7 +127,7 @@ class JdaDigestSenderTest {
         MessageCreateAction broken = mock(MessageCreateAction.class);
         given(broken.complete()).willThrow(new IllegalStateException("network down"));
         given(channel.sendMessage(any(MessageCreateData.class))).willReturn(ok, broken);
-        JdaDigestSender sender = new JdaDigestSender(jdaReturning(channel));
+        JdaDigestSender sender = new JdaDigestSender(jdaReturning(channel), true);
 
         assertThatThrownBy(() -> sender.send(100L, List.of(FIRST, FIRST)))
                 .isInstanceOfSatisfying(DigestSendException.class,

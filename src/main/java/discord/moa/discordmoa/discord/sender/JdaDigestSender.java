@@ -19,6 +19,7 @@ import net.dv8tion.jda.api.exceptions.ErrorResponseException;
 import net.dv8tion.jda.api.exceptions.InsufficientPermissionException;
 import net.dv8tion.jda.api.utils.messages.MessageCreateBuilder;
 import net.dv8tion.jda.api.utils.messages.MessageCreateData;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
@@ -33,9 +34,12 @@ public class JdaDigestSender implements DigestSender {
     static final String ASK_LABEL = "개발자에게 질문하기";
 
     private final JDA jda;
+    private final boolean buttonsEnabled;
 
-    public JdaDigestSender(@Lazy JDA jda) {
+    public JdaDigestSender(@Lazy JDA jda,
+                           @Value("${discord.digest-buttons-enabled:false}") boolean buttonsEnabled) {
         this.jda = jda;
+        this.buttonsEnabled = buttonsEnabled;
     }
 
     public static String confirmButtonId(Long itemId) {
@@ -59,7 +63,7 @@ public class JdaDigestSender implements DigestSender {
         List<Long> sentMessageIds = new ArrayList<>();
         for (DigestMessage message : messages) {
             try {
-                Message sent = channel.sendMessage(toMessageData(message)).complete();
+                Message sent = channel.sendMessage(toMessageData(message, buttonsEnabled)).complete();
                 sentMessageIds.add(sent.getIdLong());
             } catch (InsufficientPermissionException e) {
                 throw new DigestSendException(
@@ -94,14 +98,17 @@ public class JdaDigestSender implements DigestSender {
         }
     }
 
-    static MessageCreateData toMessageData(DigestMessage message) {
+    /**
+     * @param buttonsEnabled false면 항목 텍스트만 보내고 확인/질문 버튼(ActionRow)은 붙이지 않는다
+     */
+    static MessageCreateData toMessageData(DigestMessage message, boolean buttonsEnabled) {
         List<MessageTopLevelComponent> components = new ArrayList<>();
         for (DigestBlock block : message.blocks()) {
             if (!components.isEmpty()) {
                 components.add(Separator.createDivider(Separator.Spacing.SMALL));
             }
             components.add(TextDisplay.of(block.text()));
-            if (block.hasButtons()) {
+            if (buttonsEnabled && block.hasButtons()) {
                 components.add(ActionRow.of(
                         Button.success(confirmButtonId(block.itemId()), CONFIRM_LABEL),
                         Button.secondary(askButtonId(block.itemId()), ASK_LABEL)
