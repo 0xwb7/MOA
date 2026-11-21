@@ -115,9 +115,10 @@ public class ChangeSummarizer {
         OpenAiRequest request = request(input.text());
         int maxRetries = Math.max(0, openAiProperties.maxRetries());
         for (int attempt = 0; ; attempt++) {
-            String capReason = dailyCapExceeded();
+            String capReason = dailyCapExceeded(purpose);
             if (capReason != null) {
-                return fallback(attempts, batchIds, capReason);
+                log.warn("LLM 일일 상한에 걸려 요약하지 않아요: teamId={}, purpose={}, reason={}", teamId, purpose, capReason);
+                return SummaryResult.limitReached(batchIds, capReason, attempts.stats());
             }
 
             attempts.count++;
@@ -185,17 +186,23 @@ public class ChangeSummarizer {
         );
     }
 
-    private String dailyCapExceeded() {
+    /**
+     * 상한은 용도별로 따로 센다. 미리보기를 많이 돌려도 정기 발송 상한은 줄지 않는다.
+     */
+    private String dailyCapExceeded(LlmCallPurpose purpose) {
         Instant since = LocalDate.now(clock.withZone(summaryProperties.zone()))
                 .atStartOfDay(summaryProperties.zone())
                 .toInstant();
-        long calls = llmCallRepository.countByCreatedAtGreaterThanEqual(since);
-        if (calls >= summaryProperties.dailyMaxCalls()) {
-            return "오늘 LLM 호출 상한(" + summaryProperties.dailyMaxCalls() + "회)에 도달했어요";
+        String label = purpose == LlmCallPurpose.PREVIEW ? "미리보기용" : "정기 발송용";
+        int maxCalls = summaryProperties.dailyMaxCalls(purpose);
+        long calls = llmCallRepository.countByPurposeAndCreatedAtGreaterThanEqual(purpose, since);
+        if (calls >= maxCalls) {
+            return "오늘 " + label + " LLM 호출 상한(" + maxCalls + "회)에 도달했어요";
         }
-        long tokens = llmCallRepository.sumTokensSince(since);
-        if (tokens >= summaryProperties.dailyMaxTokens()) {
-            return "오늘 LLM 토큰 상한(" + summaryProperties.dailyMaxTokens() + ")에 도달했어요 (사용 " + tokens + ")";
+        long maxTokens = summaryProperties.dailyMaxTokens(purpose);
+        long tokens = llmCallRepository.sumTokensSince(purpose, since);
+        if (tokens >= maxTokens) {
+            return "오늘 " + label + " LLM 토큰 상한(" + maxTokens + ")에 도달했어요 (사용 " + tokens + ")";
         }
         return null;
     }

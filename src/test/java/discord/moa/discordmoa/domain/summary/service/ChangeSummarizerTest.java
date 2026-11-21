@@ -42,6 +42,7 @@ import static discord.moa.discordmoa.domain.summary.service.SummaryFixtures.team
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
@@ -199,24 +200,71 @@ class ChangeSummarizerTest {
 
     @Test
     void 일일_호출_상한에_도달하면_LLM을_부르지_않는다() {
-        given(llmCallRepository.countByCreatedAtGreaterThanEqual(any())).willReturn(40L);
+        given(llmCallRepository.countByPurposeAndCreatedAtGreaterThanEqual(eq(LlmCallPurpose.DIGEST), any())).willReturn(40L);
 
         SummaryResult result = summarizer(40, 1_000_000).summarize(TEAM_ID, LlmCallPurpose.DIGEST);
 
-        assertFallback(result, "호출 상한(40회)");
+        assertFallback(result, "정기 발송용 LLM 호출 상한(40회)");
+        assertThat(result.limitReached()).isTrue();
         verify(openAiClient, never()).createResponse(any());
         assertThat(calls).isEmpty();
     }
 
     @Test
     void 일일_토큰_상한에_도달하면_LLM을_부르지_않는다() {
-        given(llmCallRepository.countByCreatedAtGreaterThanEqual(any())).willReturn(3L);
-        given(llmCallRepository.sumTokensSince(any())).willReturn(1_000_000L);
+        given(llmCallRepository.countByPurposeAndCreatedAtGreaterThanEqual(eq(LlmCallPurpose.DIGEST), any())).willReturn(3L);
+        given(llmCallRepository.sumTokensSince(eq(LlmCallPurpose.DIGEST), any())).willReturn(1_000_000L);
 
         SummaryResult result = summarizer(40, 1_000_000).summarize(TEAM_ID, LlmCallPurpose.DIGEST);
 
         assertFallback(result, "토큰 상한");
         verify(openAiClient, never()).createResponse(any());
+    }
+
+    @Test
+    void 미리보기가_상한에_걸려도_정기_발송은_LLM을_부른다() {
+        given(llmCallRepository.countByPurposeAndCreatedAtGreaterThanEqual(eq(LlmCallPurpose.PREVIEW), any())).willReturn(30L);
+        given(llmCallRepository.countByPurposeAndCreatedAtGreaterThanEqual(eq(LlmCallPurpose.DIGEST), any())).willReturn(5L);
+        given(openAiClient.createResponse(any())).willReturn(response(
+                "{\"items\":[{\"status\":\"PARTIAL\",\"title\":\"로그인\",\"commitShas\":[\"%s\"]}]}".formatted(sha('a'))));
+        ChangeSummarizer summarizer = summarizer(Map.of(LlmCallPurpose.DIGEST, 60, LlmCallPurpose.PREVIEW, 30));
+
+        SummaryResult preview = summarizer.summarize(TEAM_ID, LlmCallPurpose.PREVIEW);
+        SummaryResult digest = summarizer.summarize(TEAM_ID, LlmCallPurpose.DIGEST);
+
+        assertThat(preview.limitReached()).isTrue();
+        assertThat(preview.fallbackReason()).contains("미리보기용 LLM 호출 상한(30회)");
+        assertThat(digest.succeeded()).isTrue();
+        verify(openAiClient, times(1)).createResponse(any());
+        assertThat(calls).singleElement().extracting(LlmCall::getPurpose).isEqualTo(LlmCallPurpose.DIGEST);
+    }
+
+    @Test
+    void 정기_발송이_상한에_걸려도_미리보기는_LLM을_부른다() {
+        given(llmCallRepository.countByPurposeAndCreatedAtGreaterThanEqual(eq(LlmCallPurpose.DIGEST), any())).willReturn(60L);
+        given(openAiClient.createResponse(any())).willReturn(response(
+                "{\"items\":[{\"status\":\"PARTIAL\",\"title\":\"로그인\",\"commitShas\":[\"%s\"]}]}".formatted(sha('a'))));
+        ChangeSummarizer summarizer = summarizer(Map.of(LlmCallPurpose.DIGEST, 60, LlmCallPurpose.PREVIEW, 30));
+
+        SummaryResult digest = summarizer.summarize(TEAM_ID, LlmCallPurpose.DIGEST);
+        SummaryResult preview = summarizer.summarize(TEAM_ID, LlmCallPurpose.PREVIEW);
+
+        assertThat(digest.limitReached()).isTrue();
+        assertThat(digest.fallbackReason()).contains("정기 발송용 LLM 호출 상한(60회)");
+        assertThat(preview.succeeded()).isTrue();
+        verify(openAiClient, times(1)).createResponse(any());
+        assertThat(calls).singleElement().extracting(LlmCall::getPurpose).isEqualTo(LlmCallPurpose.PREVIEW);
+    }
+
+    @Test
+    void 토큰_상한도_용도별로_센다() {
+        given(llmCallRepository.sumTokensSince(eq(LlmCallPurpose.PREVIEW), any())).willReturn(1_000_000L);
+        given(openAiClient.createResponse(any())).willReturn(response(
+                "{\"items\":[{\"status\":\"PARTIAL\",\"title\":\"로그인\",\"commitShas\":[\"%s\"]}]}".formatted(sha('a'))));
+        ChangeSummarizer summarizer = summarizer(40, 1_000_000);
+
+        assertThat(summarizer.summarize(TEAM_ID, LlmCallPurpose.PREVIEW).fallbackReason()).contains("미리보기용 LLM 토큰 상한");
+        assertThat(summarizer.summarize(TEAM_ID, LlmCallPurpose.DIGEST).succeeded()).isTrue();
     }
 
     @Test
@@ -226,7 +274,8 @@ class ChangeSummarizerTest {
         summarizer(40, 1_000_000).summarize(TEAM_ID, LlmCallPurpose.DIGEST);
 
         // 2026-11-20 00:00 KST
-        verify(llmCallRepository).countByCreatedAtGreaterThanEqual(Instant.parse("2026-11-19T15:00:00Z"));
+        verify(llmCallRepository).countByPurposeAndCreatedAtGreaterThanEqual(
+                LlmCallPurpose.DIGEST, Instant.parse("2026-11-19T15:00:00Z"));
     }
 
     @Test
@@ -268,7 +317,8 @@ class ChangeSummarizerTest {
 
     @Test
     void 재시도_중_일일_상한에_도달하면_멈춘다() {
-        given(llmCallRepository.countByCreatedAtGreaterThanEqual(any())).willReturn(39L, 40L);
+        given(llmCallRepository.countByPurposeAndCreatedAtGreaterThanEqual(eq(LlmCallPurpose.DIGEST), any()))
+                .willReturn(39L, 40L);
         given(openAiClient.createResponse(any())).willThrow(OpenAiCallException.fromStatus(500, "", null));
 
         assertFallback(summarizer(40, 1_000_000).summarize(TEAM_ID, LlmCallPurpose.DIGEST), "호출 상한");
@@ -314,7 +364,7 @@ class ChangeSummarizerTest {
 
         assertThat(result.hasChanges()).isFalse();
         verify(openAiClient, never()).createResponse(any());
-        verify(llmCallRepository, never()).countByCreatedAtGreaterThanEqual(any());
+        verify(llmCallRepository, never()).countByPurposeAndCreatedAtGreaterThanEqual(any(), any());
     }
 
     @Test
@@ -354,8 +404,18 @@ class ChangeSummarizerTest {
         return summarizer(dailyMaxCalls, dailyMaxTokens, 60_000);
     }
 
+    private ChangeSummarizer summarizer(Map<LlmCallPurpose, Integer> dailyMaxCalls) {
+        SummaryProperties base = properties(60_000, 1, 1_000_000);
+        return summarizer(new SummaryProperties(base.promptVersion(), base.maxInputChars(), dailyMaxCalls,
+                Map.of(LlmCallPurpose.DIGEST, 1_000_000L, LlmCallPurpose.PREVIEW, 1_000_000L), base.zone(),
+                base.excludedFiles(), base.patchOmittedFiles()));
+    }
+
     private ChangeSummarizer summarizer(int dailyMaxCalls, long dailyMaxTokens, int maxInputChars) {
-        SummaryProperties summaryProperties = properties(maxInputChars, dailyMaxCalls, dailyMaxTokens);
+        return summarizer(properties(maxInputChars, dailyMaxCalls, dailyMaxTokens));
+    }
+
+    private ChangeSummarizer summarizer(SummaryProperties summaryProperties) {
         OpenAiProperties openAiProperties = new OpenAiProperties("test-key", "http://localhost", "gpt-test", "low",
                 Duration.ofSeconds(60), 2, 8000);
         return new ChangeSummarizer(changeBatchRepository, teamRepository, llmCallRepository, openAiClient,

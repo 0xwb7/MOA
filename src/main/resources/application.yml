@@ -31,8 +31,13 @@ openai:
 summary:
   prompt-version: v1
   max-input-chars: 60000
-  daily-max-calls: 40
-  daily-max-tokens: 1000000
+  # 일일 상한은 용도별로 따로 센다 (재시도 포함). 정기 발송은 하루 12회 × 최대 3번 시도 = 36회
+  daily-max-calls:
+    digest: 60
+    preview: 30
+  daily-max-tokens:
+    digest: 1500000
+    preview: 500000
   zone: Asia/Seoul
   excluded-files:
     - "**/.env"

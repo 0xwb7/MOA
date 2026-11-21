@@ -31,6 +31,9 @@ final class SummaryPreviewMessage {
         List<String> body = new ArrayList<>();
         if (result.succeeded()) {
             result.items().forEach(item -> body.add(line(item)));
+        } else if (result.limitReached()) {
+            body.add("⚠️ " + result.fallbackReason());
+            body.add("미리보기 상한은 정기 발송 상한과 따로 계산돼서, 정기 발송에는 영향이 없어요. 내일 다시 시도해 주세요.");
         } else {
             body.add("⚠️ 요약을 만들지 못했어요: " + result.fallbackReason());
             body.add("실제 발송이었다면 변경 목록(fallback)으로 보냈을 거예요.");

@@ -43,6 +43,16 @@ class SummaryPreviewMessageTest {
     }
 
     @Test
+    void 미리보기_상한에_걸리면_정기_발송과_별개라고_알려준다() {
+        SummaryResult result = SummaryResult.limitReached(List.of(1L), "오늘 미리보기용 LLM 호출 상한(30회)에 도달했어요",
+                new SummaryStats("v1", "gpt-6.1-terra", 0, 0, 0, 0, 0));
+
+        assertThat(SummaryPreviewMessage.format(new SummaryPreview("1팀", result)))
+                .contains("⚠️ 오늘 미리보기용 LLM 호출 상한(30회)에 도달했어요", "정기 발송에는 영향이 없어요")
+                .doesNotContain("fallback");
+    }
+
+    @Test
     void 변경이_없으면_수집을_안내한다() {
         assertThat(SummaryPreviewMessage.format(new SummaryPreview("1팀", SummaryResult.noChanges())))
                 .contains("/수집테스트");

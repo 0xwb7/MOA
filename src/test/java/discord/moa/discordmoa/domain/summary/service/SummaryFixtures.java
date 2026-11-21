@@ -3,6 +3,7 @@ package discord.moa.discordmoa.domain.summary.service;
 import discord.moa.discordmoa.domain.collect.entity.ChangeBatch;
 import discord.moa.discordmoa.domain.collect.entity.CommitSnapshot;
 import discord.moa.discordmoa.domain.collect.entity.FileChange;
+import discord.moa.discordmoa.domain.summary.entity.LlmCallPurpose;
 import discord.moa.discordmoa.domain.team.entity.Team;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.global.config.SummaryProperties;
@@ -14,6 +15,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 
 final class SummaryFixtures {
@@ -27,11 +29,13 @@ final class SummaryFixtures {
     }
 
     /**
-     * 파일 패턴은 실제 application.yml 값을 그대로 쓴다.
+     * 일일 상한은 용도(DIGEST, PREVIEW)마다 같은 값으로 둔다. 파일 패턴은 실제 application.yml 값을 그대로 쓴다.
      */
     static SummaryProperties properties(int maxInputChars, int dailyMaxCalls, long dailyMaxTokens) {
-        return new SummaryProperties("v1", maxInputChars, dailyMaxCalls, dailyMaxTokens, SEOUL,
-                ymlList("summary.excluded-files"), ymlList("summary.patch-omitted-files"));
+        return new SummaryProperties("v1", maxInputChars,
+                Map.of(LlmCallPurpose.DIGEST, dailyMaxCalls, LlmCallPurpose.PREVIEW, dailyMaxCalls),
+                Map.of(LlmCallPurpose.DIGEST, dailyMaxTokens, LlmCallPurpose.PREVIEW, dailyMaxTokens),
+                SEOUL, ymlList("summary.excluded-files"), ymlList("summary.patch-omitted-files"));
     }
 
     static Team team() {

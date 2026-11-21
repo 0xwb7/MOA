@@ -1,5 +1,6 @@
 package discord.moa.discordmoa.global.config;
 
+import discord.moa.discordmoa.domain.summary.entity.LlmCallPurpose;
 import discord.moa.discordmoa.domain.summary.service.SummaryInputBuilder;
 import discord.moa.discordmoa.domain.summary.service.SummaryPrompt;
 import discord.moa.discordmoa.domain.summary.service.SummaryResponseParser;
@@ -43,6 +44,10 @@ class LlmConfigTest {
             assertThat(summary.promptVersion()).isEqualTo("v1");
             assertThat(summary.maxInputChars()).isEqualTo(60_000);
             assertThat(summary.zone()).isEqualTo(ZoneId.of("Asia/Seoul"));
+            assertThat(summary.dailyMaxCalls(LlmCallPurpose.DIGEST)).isEqualTo(60);
+            assertThat(summary.dailyMaxCalls(LlmCallPurpose.PREVIEW)).isEqualTo(30);
+            assertThat(summary.dailyMaxTokens(LlmCallPurpose.DIGEST)).isEqualTo(1_500_000L);
+            assertThat(summary.dailyMaxTokens(LlmCallPurpose.PREVIEW)).isEqualTo(500_000L);
             assertThat(summary.excludedFiles()).contains("**/.env", "**/*.pem");
             assertThat(summary.patchOmittedFiles()).contains("**/package-lock.json", "**/node_modules/**");
 
@@ -55,6 +60,17 @@ class LlmConfigTest {
     void API_키는_환경_변수에서_읽는다() {
         runner.withPropertyValues("OPENAI_API_KEY=test-key").run(context ->
                 assertThat(context.getBean(OpenAiClient.class).isConfigured()).isTrue());
+    }
+
+    @Test
+    void 용도별_상한이_빠지면_시작에_실패한다() {
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(JacksonAutoConfiguration.class))
+                .withUserConfiguration(LlmConfig.class)
+                .withPropertyValues("summary.prompt-version=v1", "summary.daily-max-calls.digest=60",
+                        "summary.daily-max-tokens.digest=1000", "summary.daily-max-tokens.preview=1000")
+                .run(context -> assertThat(context).hasFailed()
+                        .getFailure().rootCause().hasMessageContaining("summary.daily-max-calls").hasMessageContaining("PREVIEW"));
     }
 
     @Test
