@@ -8,6 +8,9 @@ import discord.moa.discordmoa.domain.team.entity.Team;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.domain.team.repository.TeamRepository;
 import discord.moa.discordmoa.domain.team.repository.TrackedRepoRepository;
+import discord.moa.discordmoa.domain.team.service.TeamBusyException;
+import discord.moa.discordmoa.domain.team.service.TeamLocks;
+import discord.moa.discordmoa.support.TeamLockHolder;
 import discord.moa.discordmoa.github.client.GitHubClient;
 import discord.moa.discordmoa.github.client.GitHubInstallationGoneException;
 import discord.moa.discordmoa.github.dto.GitHubCommit;
@@ -65,13 +68,14 @@ class ChangeCollectorTest {
     @Mock
     private ChangeBatchRepository changeBatchRepository;
 
+    private final TeamLocks teamLocks = new TeamLocks();
     private ChangeCollector collector;
     private Team team;
 
     @BeforeEach
     void setUp() {
         ChangeBatchWriter writer = new ChangeBatchWriter(changeBatchRepository, trackedRepoRepository);
-        collector = new ChangeCollector(gitHubClient, trackedRepoRepository, teamRepository, writer);
+        collector = new ChangeCollector(gitHubClient, trackedRepoRepository, teamRepository, writer, teamLocks);
         team = new Team("모아팀", 100L, 1L);
         ReflectionTestUtils.setField(team, "id", 10L);
     }
@@ -326,6 +330,18 @@ class ChangeCollectorTest {
                         ChangeCollector.UNKNOWN_FAILURE),
                 new RepoCollectResult("owner/healthy", RepoCollectResult.Outcome.COLLECTED, 1, 1, false, false, null),
                 new RepoCollectResult("owner/quiet", RepoCollectResult.Outcome.NO_CHANGE, 0, 0, false, false, null));
+    }
+
+    @Test
+    void 같은_팀이_처리_중이면_수집테스트를_거절한다() throws Exception {
+        given(teamRepository.findByDiscordChannelId(100L)).willReturn(Optional.of(team));
+
+        try (TeamLockHolder ignored = new TeamLockHolder(teamLocks, 10L)) {
+            assertThatThrownBy(() -> collector.collectTeamByChannel(100L))
+                    .isInstanceOf(TeamBusyException.class)
+                    .hasMessageContaining("처리 중");
+        }
+        verifyNoInteractions(gitHubClient);
     }
 
     @Test

@@ -7,6 +7,7 @@ import discord.moa.discordmoa.domain.team.entity.Team;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.domain.team.repository.TeamRepository;
 import discord.moa.discordmoa.domain.team.repository.TrackedRepoRepository;
+import discord.moa.discordmoa.domain.team.service.TeamLocks;
 import discord.moa.discordmoa.github.client.GitHubClient;
 import discord.moa.discordmoa.github.client.GitHubInstallationGoneException;
 import discord.moa.discordmoa.github.dto.GitHubCommit;
@@ -46,6 +47,7 @@ public class ChangeCollector {
     private final TrackedRepoRepository trackedRepoRepository;
     private final TeamRepository teamRepository;
     private final ChangeBatchWriter changeBatchWriter;
+    private final TeamLocks teamLocks;
 
     /**
      * App을 지웠다가 다시 설치해 설치 ID가 바뀌었으면, 새 ID로 갱신하고 한 번만 다시 시도한다.
@@ -143,7 +145,9 @@ public class ChangeCollector {
     public TeamCollectResult collectTeamByChannel(Long channelId) {
         Team team = teamRepository.findByDiscordChannelId(channelId)
                 .orElseThrow(() -> new IllegalStateException("팀 채팅방에서 실행해 주세요. 이 채널은 팀으로 등록돼 있지 않아요."));
-        return new TeamCollectResult(team.getName(), collectTeam(team.getId()));
+        // /수집테스트: 같은 팀의 준비·발송과 겹치지 않게 하고, 처리 중이면 기다리지 않고 거절한다
+        return teamLocks.callIfFree(team.getId(), team.getName(),
+                () -> new TeamCollectResult(team.getName(), collectTeam(team.getId())));
     }
 
     private Collected collectByCompare(RepoRef ref, String fullName, String baseSha, String headSha) {
