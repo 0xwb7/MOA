@@ -4,6 +4,7 @@ import discord.moa.discordmoa.domain.collect.entity.ChangeBatch;
 import discord.moa.discordmoa.domain.collect.entity.ChangeBatchStatus;
 import discord.moa.discordmoa.domain.collect.entity.CommitSnapshot;
 import discord.moa.discordmoa.domain.collect.repository.ChangeBatchRepository;
+import discord.moa.discordmoa.domain.digest.entity.CycleKind;
 import discord.moa.discordmoa.domain.digest.entity.Digest;
 import discord.moa.discordmoa.domain.digest.entity.DigestItem;
 import discord.moa.discordmoa.domain.digest.entity.DigestStatus;
@@ -17,10 +18,10 @@ import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.domain.team.repository.TeamRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -31,12 +32,21 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+/**
+ * 회차(Digest)와 배치(ChangeBatch)의 상태 전이를 DB에 기록한다.
+ * <pre>
+ * Digest:      (없음) → PREPARING → READY → SENT / FAILED
+ * ChangeBatch: COLLECTED → PREPARED → SENT,  발송 실패·준비 취소 시 PREPARED → COLLECTED
+ * </pre>
+ * 같은 회차를 두 번 처리하지 않는 정확성은 유일 제약(팀, scheduledFor)과 조건부 UPDATE로 보장한다.
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class DigestWriter {
 
-    static final Duration STALE_PENDING_AFTER = Duration.ofMinutes(10);
+    static final String LATE_COLLECTED_REASON = "요약을 시작한 뒤에 수집된 변경이라 요약하지 않았어요";
+    static final String BATCHES_CHANGED_REASON = "요약하는 동안 배치 상태가 바뀌었어요";
 
     private final TeamRepository teamRepository;
     private final ChangeBatchRepository changeBatchRepository;
@@ -46,154 +56,203 @@ public class DigestWriter {
     private final SummaryDigestFormatter summaryFormatter;
 
     /**
-     * LLM 요약(트랜잭션 밖)을 시작하기 전에 확인한다. 진행 중인 발송이 있으면 요약 비용을 쓰지 않고 바로 거절한다.
+     * 회차를 선점한다. 없으면 PREPARING으로 만들고, 이미 있으면 그 상태를 돌려준다.
+     * 트랜잭션 밖에서 호출한다 (유일 제약 위반이 나도 다시 조회할 수 있도록).
      */
-    @Transactional(readOnly = true)
-    public void checkNotInProgress(Long teamId, Instant now) {
-        for (Digest pending : digestRepository.findAllByTeamIdAndStatus(teamId, DigestStatus.PENDING)) {
-            if (pending.getCreatedAt().isAfter(now.minus(STALE_PENDING_AFTER))) {
-                throw new IllegalStateException("이 팀의 발송이 이미 진행 중이에요. 잠시 후 다시 시도해 주세요.");
-            }
+    public CycleClaim claimCycle(Long teamId, Instant scheduledFor, CycleKind kind, Instant now) {
+        Optional<Digest> existing = digestRepository.findByTeamIdAndScheduledFor(teamId, scheduledFor);
+        if (existing.isPresent()) {
+            return new CycleClaim(existing.get().getId(), existing.get().getStatus(), false);
         }
-    }
-
-    /**
-     * 요약이 성공했으면 LLM Digest를, 아니면 FALLBACK(또는 NO_CHANGE) Digest를 만든다.
-     */
-    @Transactional
-    public PreparedDigest prepare(Long teamId, Instant now, SummaryResult summary) {
         Team team = teamRepository.findById(teamId)
                 .orElseThrow(() -> new IllegalStateException("팀을 찾을 수 없어요: teamId=" + teamId));
-        closeOrRejectPending(teamId, now);
-
-        if (summary.succeeded()) {
-            Optional<PreparedDigest> llm = prepareSummary(team, now, summary);
-            if (llm.isPresent()) {
-                return llm.get();
-            }
-            log.warn("요약하는 동안 배치 상태가 바뀌어 변경 목록(fallback)으로 보내요: team={}, batchIds={}",
-                    team.getName(), summary.changeBatchIds());
+        try {
+            Digest created = digestRepository.saveAndFlush(new Digest(team, scheduledFor, kind, now));
+            return new CycleClaim(created.getId(), DigestStatus.PREPARING, true);
+        } catch (DataIntegrityViolationException e) {
+            // 다른 쪽이 같은 회차를 먼저 만들었다
+            Digest raced = digestRepository.findByTeamIdAndScheduledFor(teamId, scheduledFor).orElseThrow(() -> e);
+            return new CycleClaim(raced.getId(), raced.getStatus(), false);
         }
+    }
 
-        List<ChangeBatch> batches = changeBatchRepository
-                .findAllByTrackedRepoTeamIdAndStatusOrderByIdAsc(teamId, ChangeBatchStatus.COLLECTED);
-
-        if (batches.isEmpty()) {
-            Digest digest = digestRepository.save(new Digest(team, DigestType.NO_CHANGE, now));
-            return new PreparedDigest(digest.getId(), DigestType.NO_CHANGE, team.getName(),
-                    team.getDiscordChannelId(), team.getPmDiscordUserId(), formatter.noChange(team.getName()),
-                    List.of(), List.of());
-        }
-
-        Digest digest = digestRepository.save(new Digest(team, DigestType.FALLBACK, now));
-        List<PreparedDigest.Item> items = new ArrayList<>();
-        for (List<ChangeBatch> repoBatches : groupByRepo(batches).values()) {
-            TrackedRepo repo = repoBatches.getFirst().getTrackedRepo();
-            String text = formatter.itemText(repo.getFullName(), repoBatches);
-            List<String> commitShas = repoBatches.stream()
-                    .flatMap(batch -> batch.getCommits().stream())
-                    .map(CommitSnapshot::sha)
-                    .toList();
-
-            DigestItem item = digestItemRepository.save(new DigestItem(digest, repo, text, commitShas));
-            items.add(new PreparedDigest.Item(item.getId(), text,
-                    repoBatches.stream().map(ChangeBatch::getId).toList()));
-        }
-
-        return new PreparedDigest(digest.getId(), DigestType.FALLBACK, team.getName(), team.getDiscordChannelId(),
-                team.getPmDiscordUserId(), formatter.header(team.getName(), team.getPmDiscordUserId()), items,
-                batches.stream().map(ChangeBatch::getId).toList());
+    @Transactional(readOnly = true)
+    public Optional<DigestStatus> findStatus(Long teamId, Instant scheduledFor) {
+        return digestRepository.findByTeamIdAndScheduledFor(teamId, scheduledFor).map(Digest::getStatus);
     }
 
     /**
-     * 요약한 배치가 모두 아직 COLLECTED일 때만 LLM Digest를 만든다.
-     * 요약하는 동안 새로 수집된 배치는 포함하지 않고 다음 회차로 넘긴다.
+     * PREPARING 회차를 READY로 완성한다.
+     * <ul>
+     *     <li>summary가 성공이고 요약한 배치를 모두 담을 수 있으면 LLM.</li>
+     *     <li>그 밖에는 지금 COLLECTED인 배치로 FALLBACK, 배치가 없으면 NO_CHANGE.</li>
+     * </ul>
+     * 이미 READY/SENT/FAILED면(마감 fallback이나 발송 시점 즉석 fallback이 먼저 처리했으면) 아무것도 쓰지 않고 empty.
+     *
+     * @param summary        null이면 LLM 없이 만든다 (마감 초과, 발송 시점 즉석 fallback)
+     * @param fallbackReason summary가 null일 때 FALLBACK 사유
      */
-    private Optional<PreparedDigest> prepareSummary(Team team, Instant now, SummaryResult summary) {
-        List<ChangeBatch> batches = changeBatchRepository.findAllById(summary.changeBatchIds());
-        boolean allCollected = batches.size() == summary.changeBatchIds().size()
-                && batches.stream().allMatch(batch -> batch.getStatus() == ChangeBatchStatus.COLLECTED);
-        if (!allCollected) {
+    @Transactional
+    public Optional<DigestType> complete(Long digestId, SummaryResult summary, String fallbackReason, Instant now) {
+        if (digestRepository.markReadyIfPreparing(digestId, DigestStatus.PREPARING, DigestStatus.READY, now) == 0) {
             return Optional.empty();
         }
+        // 위 UPDATE가 행을 잠갔으므로 이 트랜잭션이 끝날 때까지 다른 쪽은 이 회차를 바꿀 수 없다
+        Digest digestRef = digestRepository.getReferenceById(digestId);
+        Long teamId = digestRepository.findById(digestId).orElseThrow().getTeam().getId();
 
-        Map<String, TrackedRepo> repoBySha = new HashMap<>();
-        for (ChangeBatch batch : batches) {
-            batch.getCommits().forEach(commit -> repoBySha.put(commit.sha(), batch.getTrackedRepo()));
+        boolean llm = false;
+        String reason = fallbackReason;
+        if (summary != null && summary.succeeded()) {
+            int claimed = changeBatchRepository.claimByIds(summary.changeBatchIds(), digestRef,
+                    ChangeBatchStatus.COLLECTED, ChangeBatchStatus.PREPARED);
+            llm = claimed == summary.changeBatchIds().size();
+            if (!llm) {
+                log.warn("요약하는 동안 배치 상태가 바뀌어 변경 목록으로 만들어요: digestId={}, 요약 배치 {}개 중 {}개만 남음",
+                        digestId, summary.changeBatchIds().size(), claimed);
+                reason = BATCHES_CHANGED_REASON;
+            }
+        } else if (summary != null) {
+            reason = summary.hasChanges() ? summary.fallbackReason() : LATE_COLLECTED_REASON;
+        }
+        if (!llm) {
+            changeBatchRepository.claimAllOfTeam(teamId, digestRef, ChangeBatchStatus.COLLECTED, ChangeBatchStatus.PREPARED);
         }
 
-        Digest digest = digestRepository.save(new Digest(team, DigestType.LLM, now));
-        List<PreparedDigest.Item> items = new ArrayList<>();
-        for (SummaryItem summaryItem : summary.items()) {
-            Set<TrackedRepo> repos = new HashSet<>();
-            summaryItem.commitShas().forEach(sha -> repos.add(repoBySha.get(sha)));
-            TrackedRepo repo = repos.size() == 1 ? repos.iterator().next() : null;
+        Digest digest = digestRepository.findById(digestId).orElseThrow();
+        Team team = digest.getTeam();
+        List<ChangeBatch> batches = changeBatchRepository.findAllByDigestIdOrderByIdAsc(digestId);
 
-            String text = summaryFormatter.itemText(summaryItem);
-            DigestItem item = digestItemRepository.save(new DigestItem(digest, repo, text, summaryItem.commitShas()));
-            items.add(new PreparedDigest.Item(item.getId(), text, List.of()));
+        if (llm) {
+            saveLlmItems(digest, batches, summary.items());
+            digest.fillContent(DigestType.LLM, summaryFormatter.header(team.getName(), team.getPmDiscordUserId()),
+                    team.getPmDiscordUserId(), null);
+            return Optional.of(DigestType.LLM);
         }
-
-        return Optional.of(new PreparedDigest(digest.getId(), DigestType.LLM, team.getName(), team.getDiscordChannelId(),
-                team.getPmDiscordUserId(), summaryFormatter.header(team.getName(), team.getPmDiscordUserId()), items,
-                summary.changeBatchIds()));
+        if (batches.isEmpty()) {
+            digest.fillContent(DigestType.NO_CHANGE, formatter.noChange(team.getName()), null, null);
+            return Optional.of(DigestType.NO_CHANGE);
+        }
+        saveFallbackItems(digest, batches);
+        digest.fillContent(DigestType.FALLBACK, formatter.header(team.getName(), team.getPmDiscordUserId()),
+                team.getPmDiscordUserId(), reason);
+        return Optional.of(DigestType.FALLBACK);
     }
 
+    /**
+     * READY이고 아직 아무도 보내기 시작하지 않았을 때만 true.
+     */
+    public boolean claimSend(Long digestId, Instant now) {
+        return digestRepository.claimSend(digestId, DigestStatus.READY, now) == 1;
+    }
+
+    public void releaseSendClaim(Long digestId) {
+        digestRepository.releaseSendClaim(digestId, DigestStatus.READY);
+    }
+
+    @Transactional(readOnly = true)
+    public SendableDigest loadForSend(Long digestId) {
+        Digest digest = findDigest(digestId);
+        Team team = digest.getTeam();
+        List<SendableDigest.Item> items = digestItemRepository.findAllByDigestIdOrderByIdAsc(digestId).stream()
+                .map(item -> new SendableDigest.Item(item.getId(), item.getText()))
+                .toList();
+        return new SendableDigest(digest.getId(), team.getId(), team.getName(), team.getDiscordChannelId(),
+                digest.getScheduledFor(), digest.getCycleKind(), digest.getType(), digest.getHeaderText(),
+                digest.getMentionUserId(), digest.getFallbackReason(), items);
+    }
+
+    /**
+     * 발송 성공: 회차 SENT, 담긴 배치 모두 SENT.
+     */
     @Transactional
-    public void markSent(PreparedDigest prepared, Map<Long, Long> messageIdByItemId, Instant sentAt) {
-        Digest digest = findDigest(prepared);
-        markDelivered(digest, prepared, messageIdByItemId);
-        if (prepared.type() == DigestType.LLM) {
-            // LLM 항목은 배치와 1:1이 아니라서, 전부 전달됐을 때만 담긴 배치를 한꺼번에 SENT로 바꾼다
-            changeBatchRepository.findAllById(prepared.changeBatchIds())
-                    .forEach(batch -> batch.markSent(digest, null));
-        }
+    public void markSent(Long digestId, Map<Long, Long> messageIdByItemId, Instant sentAt) {
+        Digest digest = findDigest(digestId);
+        markDelivered(digestId, messageIdByItemId);
+        changeBatchRepository.findAllByDigestIdOrderByIdAsc(digestId).forEach(ChangeBatch::markSent);
         digest.markSent(sentAt);
     }
 
     /**
-     * FALLBACK은 전달된 항목의 배치만 SENT로 바꾼다. LLM은 일부만 전달됐으면 배치를 모두 COLLECTED로 둔다.
+     * 발송 실패: 회차 FAILED.
+     * FALLBACK은 전달된 항목의 배치만 SENT, 나머지는 COLLECTED로 되돌린다.
+     * LLM은 항목과 배치가 1:1이 아니라서 일부만 전달됐어도 모두 COLLECTED로 되돌린다.
      */
     @Transactional
-    public void markFailed(PreparedDigest prepared, Map<Long, Long> deliveredMessageIdByItemId, String reason) {
-        Digest digest = findDigest(prepared);
-        markDelivered(digest, prepared, deliveredMessageIdByItemId);
+    public void markFailed(Long digestId, Map<Long, Long> deliveredMessageIdByItemId, String reason) {
+        Digest digest = findDigest(digestId);
+        markDelivered(digestId, deliveredMessageIdByItemId);
+        for (ChangeBatch batch : changeBatchRepository.findAllByDigestIdOrderByIdAsc(digestId)) {
+            boolean delivered = digest.getType() == DigestType.FALLBACK
+                    && batch.getDigestItem() != null
+                    && deliveredMessageIdByItemId.containsKey(batch.getDigestItem().getId());
+            if (delivered) {
+                batch.markSent();
+            } else {
+                batch.revertToCollected();
+            }
+        }
         digest.markFailed(reason);
     }
 
-    private void markDelivered(Digest digest, PreparedDigest prepared, Map<Long, Long> messageIdByItemId) {
-        for (PreparedDigest.Item prepItem : prepared.items()) {
-            Long messageId = messageIdByItemId.get(prepItem.itemId());
-            if (messageId == null) {
-                continue;
+    /**
+     * 준비 취소 (재시작 복구 포기 등): 끝나지 않은 회차를 FAILED로 닫고 담긴 배치를 모두 COLLECTED로 되돌린다.
+     *
+     * @return 이미 끝난 회차였으면 false
+     */
+    @Transactional
+    public boolean abandon(Long digestId, String reason) {
+        Digest digest = findDigest(digestId);
+        if (digest.isFinished()) {
+            return false;
+        }
+        changeBatchRepository.findAllByDigestIdOrderByIdAsc(digestId).forEach(ChangeBatch::revertToCollected);
+        digest.markFailed(reason);
+        return true;
+    }
+
+    private void markDelivered(Long digestId, Map<Long, Long> messageIdByItemId) {
+        for (DigestItem item : digestItemRepository.findAllByDigestIdOrderByIdAsc(digestId)) {
+            Long messageId = messageIdByItemId.get(item.getId());
+            if (messageId != null) {
+                item.markDelivered(messageId);
             }
-            DigestItem item = digestItemRepository.findById(prepItem.itemId())
-                    .orElseThrow(() -> new IllegalStateException("발송 항목을 찾을 수 없어요: " + prepItem.itemId()));
-            item.markDelivered(messageId);
-            changeBatchRepository.findAllById(prepItem.changeBatchIds())
-                    .forEach(batch -> batch.markSent(digest, item));
         }
     }
 
-    private void closeOrRejectPending(Long teamId, Instant now) {
-        for (Digest pending : digestRepository.findAllByTeamIdAndStatus(teamId, DigestStatus.PENDING)) {
-            if (pending.getCreatedAt().isAfter(now.minus(STALE_PENDING_AFTER))) {
-                throw new IllegalStateException("이 팀의 발송이 이미 진행 중이에요. 잠시 후 다시 시도해 주세요.");
-            }
-            pending.markFailed("발송 도중 중단됐어요 (서버 재시작 등). 미발송 변경은 다음 회차에 다시 포함돼요.");
+    private void saveLlmItems(Digest digest, List<ChangeBatch> batches, List<SummaryItem> summaryItems) {
+        Map<String, TrackedRepo> repoBySha = new HashMap<>();
+        for (ChangeBatch batch : batches) {
+            batch.getCommits().forEach(commit -> repoBySha.put(commit.sha(), batch.getTrackedRepo()));
+        }
+        for (SummaryItem summaryItem : summaryItems) {
+            Set<TrackedRepo> repos = new HashSet<>();
+            summaryItem.commitShas().forEach(sha -> repos.add(repoBySha.get(sha)));
+            TrackedRepo repo = repos.size() == 1 ? repos.iterator().next() : null;
+            digestItemRepository.save(new DigestItem(digest, repo, summaryFormatter.itemText(summaryItem),
+                    summaryItem.commitShas()));
         }
     }
 
-    private Digest findDigest(PreparedDigest prepared) {
-        return digestRepository.findById(prepared.digestId())
-                .orElseThrow(() -> new IllegalStateException("발송 기록을 찾을 수 없어요: " + prepared.digestId()));
-    }
-
-    private static Map<Long, List<ChangeBatch>> groupByRepo(List<ChangeBatch> batches) {
+    private void saveFallbackItems(Digest digest, List<ChangeBatch> batches) {
         Map<Long, List<ChangeBatch>> byRepo = new LinkedHashMap<>();
         for (ChangeBatch batch : batches) {
             byRepo.computeIfAbsent(batch.getTrackedRepo().getId(), id -> new ArrayList<>()).add(batch);
         }
-        return byRepo;
+        for (List<ChangeBatch> repoBatches : byRepo.values()) {
+            TrackedRepo repo = repoBatches.getFirst().getTrackedRepo();
+            List<String> commitShas = repoBatches.stream()
+                    .flatMap(batch -> batch.getCommits().stream())
+                    .map(CommitSnapshot::sha)
+                    .toList();
+            DigestItem item = digestItemRepository.save(new DigestItem(digest, repo,
+                    formatter.itemText(repo.getFullName(), repoBatches), commitShas));
+            repoBatches.forEach(batch -> batch.linkItem(item));
+        }
+    }
+
+    private Digest findDigest(Long digestId) {
+        return digestRepository.findById(digestId)
+                .orElseThrow(() -> new IllegalStateException("발송 기록을 찾을 수 없어요: " + digestId));
     }
 }

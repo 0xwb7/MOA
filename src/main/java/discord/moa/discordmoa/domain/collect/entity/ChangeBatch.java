@@ -45,6 +45,7 @@ public class ChangeBatch {
     private Instant collectedAt;
 
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)   // MySQL 네이티브 enum 대신 VARCHAR (값 추가 시 ddl-auto가 컬럼을 바꾸지 않음, Digest 참고)
     @Column(nullable = false, length = 20)
     private ChangeBatchStatus status;
 
@@ -62,7 +63,7 @@ public class ChangeBatch {
     @Column(nullable = false)
     private List<FileChange> files;
 
-    // 이 배치를 담아 발송한 Digest
+    // 이 배치를 담은 회차 Digest (PREPARED, SENT일 때)
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "digest_id")
     private Digest digest;
@@ -86,9 +87,23 @@ public class ChangeBatch {
         this.files = files;
     }
 
-    public void markSent(Digest digest, DigestItem digestItem) {
-        this.status = ChangeBatchStatus.SENT;
-        this.digest = digest;
+    /**
+     * PREPARED 전환은 ChangeBatchRepository의 조건부 UPDATE로 한다. FALLBACK 항목이 만들어지면 연결한다.
+     */
+    public void linkItem(DigestItem digestItem) {
         this.digestItem = digestItem;
+    }
+
+    public void markSent() {
+        this.status = ChangeBatchStatus.SENT;
+    }
+
+    /**
+     * 발송 실패·준비 취소: 다음 회차에 다시 담기도록 되돌리고 연결을 끊는다.
+     */
+    public void revertToCollected() {
+        this.status = ChangeBatchStatus.COLLECTED;
+        this.digest = null;
+        this.digestItem = null;
     }
 }

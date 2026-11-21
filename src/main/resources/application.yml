@@ -8,6 +8,10 @@ spring:
     url: ${DB_URL}
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
+  task:
+    scheduling:
+      pool:
+        size: 2   # cron 트리거 전용. 준비·발송은 SchedulingConfig의 별도 실행기에서 돈다
   jpa:
     hibernate:
       ddl-auto: update
@@ -70,3 +74,12 @@ summary:
     - "**/node_modules/**"
     - "**/.idea/**"
     - "**/.vscode/**"
+
+schedule:
+  zone: Asia/Seoul
+  prepare-cron: "0 30 8,20 * * *"   # 수집 + 요약 + READY 저장
+  send-cron: "0 0 9,21 * * *"       # 저장된 것을 발송 (회차 = 이 시각)
+  prepare-deadline-before: 2m       # 08:58까지 요약이 안 끝나면 변경 목록으로 READY
+  prepare-concurrency: 3            # 동시에 준비할 최대 팀 수
+  send-lock-wait: 30s               # 발송 단계가 팀 락을 기다리는 최대 시간 (지나면 락 없이 진행)
+  recovery-window: 30m              # 재시작 후 이 시간 안이면 늦게라도 발송

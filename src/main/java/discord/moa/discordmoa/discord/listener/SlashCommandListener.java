@@ -6,7 +6,9 @@ import discord.moa.discordmoa.domain.collect.service.RepoCollectResult;
 import discord.moa.discordmoa.domain.collect.service.TeamCollectResult;
 import discord.moa.discordmoa.domain.digest.entity.DigestType;
 import discord.moa.discordmoa.domain.digest.service.DigestSendResult;
+import discord.moa.discordmoa.domain.digest.service.CycleStatus;
 import discord.moa.discordmoa.domain.digest.service.DigestService;
+import discord.moa.discordmoa.domain.digest.service.ManualSendResult;
 import discord.moa.discordmoa.domain.summary.service.ChangeSummarizer;
 import discord.moa.discordmoa.domain.summary.service.SummaryPreview;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
@@ -63,6 +65,7 @@ public class SlashCommandListener extends ListenerAdapter {
             case "수집테스트" -> handleCollectTest(event);
             case "발송테스트" -> handleSendTest(event);
             case "요약미리보기" -> handleSummaryPreview(event);
+            case "회차상태" -> handleCycleStatus(event);
             default -> event.reply("알 수 없는 명령어예요.").setEphemeral(true).queue();
         }
     }
@@ -166,8 +169,9 @@ public class SlashCommandListener extends ListenerAdapter {
         long channelId = event.getChannel().getIdLong();
         runLong(event, () -> {
             try {
-                TeamCollectResult collected = changeCollector.collectTeamByChannel(channelId);
-                DigestSendResult sent = digestService.sendTeamByChannel(channelId);
+                ManualSendResult result = digestService.sendNowByChannel(channelId);
+                TeamCollectResult collected = result.collected();
+                DigestSendResult sent = result.sent();
 
                 StringBuilder message = new StringBuilder("'" + collected.teamName() + "' 팀 수집 결과\n");
                 collected.repos().forEach(repo -> message.append("• ").append(describe(repo)).append('\n'));
@@ -180,6 +184,19 @@ public class SlashCommandListener extends ListenerAdapter {
                 event.getHook().sendMessage("⚠️ 발송 중 문제가 생겼어요. 서버 로그를 확인해 주세요.").queue();
             }
         });
+    }
+
+    private void handleCycleStatus(SlashCommandInteractionEvent event) {
+        long channelId = event.getChannel().getIdLong();
+        try {
+            CycleStatus status = digestService.cycleStatusByChannel(channelId);
+            event.reply(CycleStatusMessage.format(status)).setEphemeral(true).queue();
+        } catch (IllegalStateException e) {
+            event.reply("⚠️ " + e.getMessage()).setEphemeral(true).queue();
+        } catch (RuntimeException e) {
+            log.error("회차 상태 조회 중 오류: channelId={}", channelId, e);
+            event.reply(UNEXPECTED_ERROR).setEphemeral(true).queue();
+        }
     }
 
     private void handleSummaryPreview(SlashCommandInteractionEvent event) {
