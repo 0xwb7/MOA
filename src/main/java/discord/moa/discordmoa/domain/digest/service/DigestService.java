@@ -5,6 +5,9 @@ import discord.moa.discordmoa.domain.digest.sender.DigestBlock;
 import discord.moa.discordmoa.domain.digest.sender.DigestMessage;
 import discord.moa.discordmoa.domain.digest.sender.DigestSendException;
 import discord.moa.discordmoa.domain.digest.sender.DigestSender;
+import discord.moa.discordmoa.domain.summary.entity.LlmCallPurpose;
+import discord.moa.discordmoa.domain.summary.service.ChangeSummarizer;
+import discord.moa.discordmoa.domain.summary.service.SummaryResult;
 import discord.moa.discordmoa.domain.team.entity.Team;
 import discord.moa.discordmoa.domain.team.repository.TeamRepository;
 import lombok.RequiredArgsConstructor;
@@ -25,18 +28,22 @@ public class DigestService {
     private final DigestMessagePlanner planner;
     private final DigestSender digestSender;
     private final TeamRepository teamRepository;
+    private final ChangeSummarizer changeSummarizer;
 
     public DigestSendResult sendTeam(Long teamId) {
-        PreparedDigest prepared = digestWriter.prepare(teamId, Instant.now());
+        digestWriter.checkNotInProgress(teamId, Instant.now());
+        SummaryResult summary = changeSummarizer.summarize(teamId, LlmCallPurpose.DIGEST);   // 트랜잭션 밖 (최대 수 분)
+        PreparedDigest prepared = digestWriter.prepare(teamId, Instant.now(), summary);
+        String summaryFallbackReason = prepared.type() == DigestType.FALLBACK ? fallbackReason(summary) : null;
         List<DigestMessage> messages = toMessages(prepared);
 
         List<Long> messageIds;
         try {
             messageIds = digestSender.send(prepared.channelId(), messages);
         } catch (DigestSendException e) {
-            return fail(prepared, messages, e.getSentMessageIds(), e.getMessage(), e);
+            return fail(prepared, messages, e.getSentMessageIds(), e.getMessage(), summaryFallbackReason, e);
         } catch (RuntimeException e) {
-            return fail(prepared, messages, List.of(), "예상하지 못한 오류: " + e.getMessage(), e);
+            return fail(prepared, messages, List.of(), "예상하지 못한 오류: " + e.getMessage(), summaryFallbackReason, e);
         }
 
         try {
@@ -47,7 +54,7 @@ public class DigestService {
             throw e;
         }
         return new DigestSendResult(prepared.teamName(), prepared.type(), true,
-                prepared.items().size(), messageIds.size(), null);
+                prepared.items().size(), messageIds.size(), null, summaryFallbackReason);
     }
 
     public DigestSendResult sendTeamByChannel(Long channelId) {
@@ -57,7 +64,8 @@ public class DigestService {
     }
 
     private DigestSendResult fail(PreparedDigest prepared, List<DigestMessage> messages,
-                                  List<Long> sentMessageIds, String reason, Exception cause) {
+                                  List<Long> sentMessageIds, String reason, String summaryFallbackReason,
+                                  Exception cause) {
         String failureReason = sentMessageIds.isEmpty()
                 ? reason
                 : reason + " (메시지 " + messages.size() + "개 중 " + sentMessageIds.size() + "개는 발송됨)";
@@ -65,7 +73,14 @@ public class DigestService {
 
         digestWriter.markFailed(prepared, messageIdByItemId(messages, sentMessageIds), failureReason);
         return new DigestSendResult(prepared.teamName(), prepared.type(), false,
-                prepared.items().size(), sentMessageIds.size(), failureReason);
+                prepared.items().size(), sentMessageIds.size(), failureReason, summaryFallbackReason);
+    }
+
+    private static String fallbackReason(SummaryResult summary) {
+        if (!summary.hasChanges()) {
+            return "요약을 시작한 뒤에 수집된 변경이라 요약하지 않았어요";
+        }
+        return summary.succeeded() ? "요약하는 동안 배치 상태가 바뀌었어요" : summary.fallbackReason();
     }
 
     private List<DigestMessage> toMessages(PreparedDigest prepared) {

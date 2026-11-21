@@ -1,0 +1,62 @@
+package discord.moa.discordmoa.discord.listener;
+
+import discord.moa.discordmoa.domain.summary.service.SummaryItem;
+import discord.moa.discordmoa.domain.summary.service.SummaryPreview;
+import discord.moa.discordmoa.domain.summary.service.SummaryResult;
+import discord.moa.discordmoa.domain.summary.service.SummaryStats;
+import discord.moa.discordmoa.domain.summary.service.SummaryStatus;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.stream.IntStream;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class SummaryPreviewMessageTest {
+
+    private static final SummaryStats STATS = new SummaryStats("v1", "gpt-6.1-terra", 12345, 4000, 300, 6200, 1);
+
+    @Test
+    void 항목과_통계를_보여준다() {
+        SummaryResult result = SummaryResult.success(List.of(1L), List.of(
+                new SummaryItem(SummaryStatus.READY, "로그인 기능을 써 볼 수 있어요", List.of("a", "b")),
+                new SummaryItem(SummaryStatus.INTERNAL, "내부 작업", List.of("c"))), STATS);
+
+        String text = SummaryPreviewMessage.format(new SummaryPreview("1팀", result));
+
+        assertThat(text).isEqualTo("""
+                🔎 '1팀' 요약 미리보기 (발송·상태 변경 없음)
+
+                🟢 로그인 기능을 써 볼 수 있어요 (커밋 2개)
+                ⚪ 내부 작업 (커밋 1개)
+
+                -# 입력 12,345자 · 토큰 입력 4,000 / 출력 300 · 6.2초 · 시도 1회 · 프롬프트 v1 · 모델 gpt-6.1-terra""");
+    }
+
+    @Test
+    void 실패하면_사유를_보여준다() {
+        SummaryResult result = SummaryResult.fallback(List.of(1L), "오늘 LLM 호출 상한(40회)에 도달했어요",
+                new SummaryStats("v1", "gpt-6.1-terra", 0, 0, 0, 0, 0));
+
+        assertThat(SummaryPreviewMessage.format(new SummaryPreview("1팀", result)))
+                .contains("⚠️ 요약을 만들지 못했어요: 오늘 LLM 호출 상한(40회)에 도달했어요", "fallback", "시도 0회");
+    }
+
+    @Test
+    void 변경이_없으면_수집을_안내한다() {
+        assertThat(SummaryPreviewMessage.format(new SummaryPreview("1팀", SummaryResult.noChanges())))
+                .contains("/수집테스트");
+    }
+
+    @Test
+    void 이천자를_넘지_않게_자른다() {
+        List<SummaryItem> items = IntStream.range(0, 30)
+                .mapToObj(i -> new SummaryItem(SummaryStatus.PARTIAL, "기능 " + i + " " + "가".repeat(150), List.of("a")))
+                .toList();
+
+        String text = SummaryPreviewMessage.format(new SummaryPreview("1팀", SummaryResult.success(List.of(1L), items, STATS)));
+
+        assertThat(text.length()).isLessThanOrEqualTo(2000);
+        assertThat(text).contains("… 외 ", "-# 입력 12,345자");
+    }
+}

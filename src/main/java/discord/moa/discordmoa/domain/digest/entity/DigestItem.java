@@ -31,8 +31,9 @@ public class DigestItem {
     @JoinColumn(name = "digest_id", nullable = false)
     private Digest digest;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "tracked_repo_id", nullable = false)
+    // LLM 항목은 여러 레포에 걸칠 수 있어서, 커밋이 모두 한 레포일 때만 채운다
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "tracked_repo_id")
     private TrackedRepo trackedRepo;
 
     @Column(nullable = false, length = 4000)

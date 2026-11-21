@@ -7,6 +7,8 @@ import discord.moa.discordmoa.domain.collect.service.TeamCollectResult;
 import discord.moa.discordmoa.domain.digest.entity.DigestType;
 import discord.moa.discordmoa.domain.digest.service.DigestSendResult;
 import discord.moa.discordmoa.domain.digest.service.DigestService;
+import discord.moa.discordmoa.domain.summary.service.ChangeSummarizer;
+import discord.moa.discordmoa.domain.summary.service.SummaryPreview;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.domain.team.service.TeamService;
 import discord.moa.discordmoa.domain.team.service.TrackedRepoService;
@@ -16,6 +18,9 @@ import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEve
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Slf4j
 @Component
@@ -27,6 +32,10 @@ public class SlashCommandListener extends ListenerAdapter {
     private final TrackedRepoService trackedRepoService;
     private final ChangeCollector changeCollector;
     private final DigestService digestService;
+    private final ChangeSummarizer changeSummarizer;
+
+    // LLM 요약은 수 분까지 걸릴 수 있어서 JDA 이벤트 스레드를 막지 않도록 따로 실행한다
+    private final ExecutorService longTasks = Executors.newVirtualThreadPerTaskExecutor();
 
     @Override
     public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
@@ -37,6 +46,7 @@ public class SlashCommandListener extends ListenerAdapter {
             case "레포등록" -> handleRepoRegister(event);
             case "수집테스트" -> handleCollectTest(event);
             case "발송테스트" -> handleSendTest(event);
+            case "요약미리보기" -> handleSummaryPreview(event);
             default -> event.reply("알 수 없는 명령어예요.").setEphemeral(true).queue();
         }
     }
@@ -111,30 +121,54 @@ public class SlashCommandListener extends ListenerAdapter {
         event.deferReply(true).queue();
 
         long channelId = event.getChannel().getIdLong();
-        try {
-            TeamCollectResult collected = changeCollector.collectTeamByChannel(channelId);
-            DigestSendResult sent = digestService.sendTeamByChannel(channelId);
+        longTasks.execute(() -> {
+            try {
+                TeamCollectResult collected = changeCollector.collectTeamByChannel(channelId);
+                DigestSendResult sent = digestService.sendTeamByChannel(channelId);
 
-            StringBuilder message = new StringBuilder("'" + collected.teamName() + "' 팀 수집 결과\n");
-            collected.repos().forEach(repo -> message.append("• ").append(describe(repo)).append('\n'));
-            message.append('\n').append(describeSend(sent));
-            event.getHook().sendMessage(message.toString()).queue();
-        } catch (IllegalStateException e) {
-            event.getHook().sendMessage("⚠️ " + e.getMessage()).queue();
-        } catch (RuntimeException e) {
-            log.error("발송 테스트 중 오류: channelId={}", channelId, e);
-            event.getHook().sendMessage("⚠️ 발송 중 문제가 생겼어요. 서버 로그를 확인해 주세요.").queue();
-        }
+                StringBuilder message = new StringBuilder("'" + collected.teamName() + "' 팀 수집 결과\n");
+                collected.repos().forEach(repo -> message.append("• ").append(describe(repo)).append('\n'));
+                message.append('\n').append(describeSend(sent));
+                event.getHook().sendMessage(message.toString()).queue();
+            } catch (IllegalStateException e) {
+                event.getHook().sendMessage("⚠️ " + e.getMessage()).queue();
+            } catch (RuntimeException e) {
+                log.error("발송 테스트 중 오류: channelId={}", channelId, e);
+                event.getHook().sendMessage("⚠️ 발송 중 문제가 생겼어요. 서버 로그를 확인해 주세요.").queue();
+            }
+        });
+    }
+
+    private void handleSummaryPreview(SlashCommandInteractionEvent event) {
+        event.deferReply(true).queue();
+
+        long channelId = event.getChannel().getIdLong();
+        longTasks.execute(() -> {
+            try {
+                SummaryPreview preview = changeSummarizer.previewByChannel(channelId);
+                event.getHook().sendMessage(SummaryPreviewMessage.format(preview)).queue();
+            } catch (IllegalStateException e) {
+                event.getHook().sendMessage("⚠️ " + e.getMessage()).queue();
+            } catch (RuntimeException e) {
+                log.error("요약 미리보기 중 오류: channelId={}", channelId, e);
+                event.getHook().sendMessage("⚠️ 요약 중 문제가 생겼어요. 서버 로그를 확인해 주세요.").queue();
+            }
+        });
     }
 
     private String describeSend(DigestSendResult result) {
+        String summaryNote = result.summaryFallbackReason() == null
+                ? ""
+                : "\n⚠️ LLM 요약 대신 변경 목록으로 보냈어요: " + result.summaryFallbackReason();
         if (!result.sent()) {
-            return "⚠️ 발송 실패: " + result.failureReason();
+            return "⚠️ 발송 실패: " + result.failureReason() + summaryNote;
         }
         if (result.type() == DigestType.NO_CHANGE) {
             return "✅ 변경이 없어 '변경 사항이 없어요' 안내를 보냈어요.";
         }
-        return "✅ 발송 완료: 항목 " + result.itemCount() + "개, 메시지 " + result.messageCount() + "개";
+        String kind = result.type() == DigestType.LLM ? " (LLM 요약)" : "";
+        return "✅ 발송 완료" + kind + ": 항목 " + result.itemCount() + "개, 메시지 " + result.messageCount() + "개"
+                + summaryNote;
     }
 
     private String describe(RepoCollectResult repo) {

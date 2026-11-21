@@ -17,3 +17,48 @@ github:
   app-id: ${GITHUB_APP_ID}
   private-key-path: ${GITHUB_PRIVATE_KEY_PATH}
   install-url: ${GITHUB_INSTALL_URL}
+
+openai:
+  api-key: ${OPENAI_API_KEY:}
+  base-url: https://api.openai.com/v1
+  model: gpt-6.1-terra
+  reasoning-effort: low
+  timeout: 60s
+  max-retries: 2
+  max-output-tokens: 8000
+
+summary:
+  prompt-version: v1
+  max-input-chars: 60000
+  daily-max-calls: 40
+  daily-max-tokens: 1000000
+  zone: Asia/Seoul
+  excluded-files:
+    - "**/.env"
+    - "**/.env.*"
+    - "**/*.pem"
+    - "**/*.key"
+    - "**/*.p12"
+    - "**/*.jks"
+    - "**/application-*secret*.yml"
+    - "**/application-*secret*.yaml"
+    - "**/application-*local*.yml"
+    - "**/application-*local*.yaml"
+    - "**/credentials"
+    - "**/credentials.*"
+    - "**/*credentials*.json"
+    - "**/*secret*.json"
+    - "**/*secret*.yml"
+    - "**/*secret*.yaml"
+    - "**/*secret*.properties"
+  patch-omitted-files:
+    - "**/package-lock.json"
+    - "**/yarn.lock"
+    - "**/pnpm-lock.yaml"
+    - "**/*.lock"
+    - "**/build/**"
+    - "**/dist/**"
+    - "**/out/**"
+    - "**/node_modules/**"
+    - "**/.idea/**"
+    - "**/.vscode/**"

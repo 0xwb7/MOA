@@ -13,6 +13,11 @@ import discord.moa.discordmoa.domain.digest.sender.DigestBlock;
 import discord.moa.discordmoa.domain.digest.sender.DigestMessage;
 import discord.moa.discordmoa.domain.digest.sender.DigestSendException;
 import discord.moa.discordmoa.domain.digest.sender.DigestSender;
+import discord.moa.discordmoa.domain.summary.entity.LlmCallPurpose;
+import discord.moa.discordmoa.domain.summary.service.ChangeSummarizer;
+import discord.moa.discordmoa.domain.summary.service.SummaryItem;
+import discord.moa.discordmoa.domain.summary.service.SummaryResult;
+import discord.moa.discordmoa.domain.summary.service.SummaryStatus;
 import discord.moa.discordmoa.domain.team.entity.Team;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.domain.team.repository.TeamRepository;
@@ -71,6 +76,8 @@ class DigestServiceTest {
     private DigestItemRepository digestItemRepository;
     @Mock
     private DigestSender digestSender;
+    @Mock
+    private ChangeSummarizer changeSummarizer;
 
     private final List<ChangeBatch> batches = new ArrayList<>();
     private final Map<Long, Digest> digests = new LinkedHashMap<>();
@@ -103,9 +110,15 @@ class DigestServiceTest {
         given(digestItemRepository.save(any(DigestItem.class))).willAnswer(inv -> store(inv.getArgument(0), items));
         given(digestItemRepository.findById(any())).willAnswer(inv -> Optional.ofNullable(items.get(inv.<Long>getArgument(0))));
 
+        // 기본은 요약 실패(fallback). LLM 경로 테스트에서 따로 지정한다
+        given(changeSummarizer.summarize(eq(TEAM_ID), eq(LlmCallPurpose.DIGEST))).willAnswer(inv -> {
+            List<Long> ids = collectedIds();
+            return ids.isEmpty() ? SummaryResult.noChanges() : SummaryResult.fallback(ids, "테스트: 요약 끔", null);
+        });
+
         DigestWriter writer = new DigestWriter(teamRepository, changeBatchRepository, digestRepository,
-                digestItemRepository, new FallbackDigestFormatter());
-        service = new DigestService(writer, new DigestMessagePlanner(), digestSender, teamRepository);
+                digestItemRepository, new FallbackDigestFormatter(), new SummaryDigestFormatter());
+        service = new DigestService(writer, new DigestMessagePlanner(), digestSender, teamRepository, changeSummarizer);
     }
 
     @Test
@@ -149,6 +162,7 @@ class DigestServiceTest {
 
         assertThat(result.sent()).isFalse();
         assertThat(result.failureReason()).contains("Send Messages");
+        assertThat(result.summaryFallbackReason()).isEqualTo("테스트: 요약 끔");
         Digest digest = onlyDigest();
         assertThat(digest.getStatus()).isEqualTo(DigestStatus.FAILED);
         assertThat(digest.getFailureReason()).isEqualTo("봇에게 #1팀 채널의 Send Messages 권한이 없어요.");
@@ -238,6 +252,7 @@ class DigestServiceTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("이미 진행 중");
         verify(digestSender, never()).send(any(), anyList());
+        verify(changeSummarizer, never()).summarize(any(), any());
 
         ReflectionTestUtils.setField(recent, "createdAt", Instant.now().minusSeconds(3600));
         given(digestSender.send(eq(CHANNEL_ID), anyList())).willReturn(List.of(9001L));
@@ -255,7 +270,143 @@ class DigestServiceTest {
         verify(digestSender, never()).send(any(), anyList());
     }
 
+    // ---- LLM 요약 ----
+
+    @Test
+    void LLM_요약이_성공하면_기능_단위_항목으로_보내고_배치를_모두_SENT로_바꾼다() {
+        batches.add(batch(1L, repoA, "a0", "a1", "로그인 API 추가", "README 수정"));
+        batches.add(batch(2L, repoB, "b0", "b1", "로그인 화면 추가"));
+        givenSummary(List.of(1L, 2L),
+                new SummaryItem(SummaryStatus.READY, "로그인 기능을 써 볼 수 있어요", List.of("a1-0", "b1-0")),
+                new SummaryItem(SummaryStatus.PARTIAL, "회원가입은 서버만 준비됐어요", List.of("a1-0")),
+                new SummaryItem(SummaryStatus.INTERNAL, "문서 정리", List.of("a1-1")));
+        given(digestSender.send(eq(CHANNEL_ID), anyList())).willReturn(List.of(9001L));
+
+        DigestSendResult result = service.sendTeam(TEAM_ID);
+
+        assertThat(result.sent()).isTrue();
+        assertThat(result.type()).isEqualTo(DigestType.LLM);
+        assertThat(result.itemCount()).isEqualTo(3);
+        assertThat(result.summaryFallbackReason()).isNull();
+        Digest digest = onlyDigest();
+        assertThat(digest.getType()).isEqualTo(DigestType.LLM);
+        assertThat(digest.getStatus()).isEqualTo(DigestStatus.SENT);
+
+        DigestMessage message = sentMessages().getFirst();
+        assertThat(message.mentionUserId()).isEqualTo(PM_ID);
+        assertThat(message.blocks().getFirst().text())
+                .startsWith("<@7> 지난 12시간 동안 '1팀'에 이런 변경이 있었어요")
+                .doesNotContain("요약을 만들지 못해");
+        assertThat(message.blocks().subList(1, 4)).extracting(DigestBlock::text).containsExactly(
+                "🟢 로그인 기능을 써 볼 수 있어요",
+                "🟡 회원가입은 서버만 준비됐어요",
+                "⚪ 문서 정리");
+        assertThat(message.blocks().subList(1, 4)).allMatch(DigestBlock::hasButtons);
+
+        List<DigestItem> saved = List.copyOf(items.values());
+        assertThat(saved).extracting(DigestItem::getCommitShas)
+                .containsExactly(List.of("a1-0", "b1-0"), List.of("a1-0"), List.of("a1-1"));
+        assertThat(saved.get(0).getTrackedRepo()).isNull();          // 두 레포에 걸친 기능
+        assertThat(saved.get(1).getTrackedRepo()).isSameAs(repoA);
+        assertThat(saved).extracting(DigestItem::getDiscordMessageId).containsOnly(9001L);
+
+        assertThat(batches).allSatisfy(b -> {
+            assertThat(b.getStatus()).isEqualTo(ChangeBatchStatus.SENT);
+            assertThat(b.getDigest()).isSameAs(digest);
+            assertThat(b.getDigestItem()).isNull();
+        });
+    }
+
+    @Test
+    void LLM_요약이_실패하면_변경_목록으로_보내고_사유를_알려준다() {
+        batches.add(batch(1L, repoA, "a0", "a1", "로그인 API 추가"));
+        given(changeSummarizer.summarize(TEAM_ID, LlmCallPurpose.DIGEST))
+                .willReturn(SummaryResult.fallback(List.of(1L), "응답 검증 실패: 입력에 없는 커밋 SHA", null));
+        given(digestSender.send(eq(CHANNEL_ID), anyList())).willReturn(List.of(9001L));
+
+        DigestSendResult result = service.sendTeam(TEAM_ID);
+
+        assertThat(result.sent()).isTrue();
+        assertThat(result.type()).isEqualTo(DigestType.FALLBACK);
+        assertThat(result.summaryFallbackReason()).isEqualTo("응답 검증 실패: 입력에 없는 커밋 SHA");
+        assertThat(sentMessages().getFirst().blocks().getFirst().text()).contains("요약을 만들지 못해");
+        assertThat(batches.getFirst().getStatus()).isEqualTo(ChangeBatchStatus.SENT);
+        assertThat(batches.getFirst().getDigest()).isSameAs(onlyDigest());
+        assertThat(batches.getFirst().getDigestItem()).isNotNull();
+    }
+
+    @Test
+    void LLM_Digest가_일부만_발송되면_배치를_모두_COLLECTED로_둔다() {
+        batches.add(batch(1L, repoA, "a0", "a1", "커밋"));
+        SummaryItem[] summaryItems = LongStream.rangeClosed(1, 8)
+                .mapToObj(i -> new SummaryItem(SummaryStatus.PARTIAL, "기능 " + i, List.of("a1-0")))
+                .toArray(SummaryItem[]::new);
+        givenSummary(List.of(1L), summaryItems);
+        given(digestSender.send(eq(CHANNEL_ID), anyList()))
+                .willThrow(new DigestSendException("Discord 오류", List.of(9001L)));
+
+        DigestSendResult result = service.sendTeam(TEAM_ID);
+
+        assertThat(result.sent()).isFalse();
+        assertThat(result.messageCount()).isEqualTo(1);
+        assertThat(onlyDigest().getStatus()).isEqualTo(DigestStatus.FAILED);
+        assertThat(batches.getFirst().getStatus()).isEqualTo(ChangeBatchStatus.COLLECTED);
+        assertThat(batches.getFirst().getDigest()).isNull();
+        assertThat(items.values()).extracting(DigestItem::getDiscordMessageId)
+                .containsExactly(9001L, 9001L, 9001L, 9001L, 9001L, 9001L, 9001L, null);
+    }
+
+    @Test
+    void 요약하는_동안_새로_수집된_배치는_다음_회차로_넘긴다() {
+        batches.add(batch(1L, repoA, "a0", "a1", "로그인 API 추가"));
+        given(changeSummarizer.summarize(TEAM_ID, LlmCallPurpose.DIGEST)).willAnswer(inv -> {
+            batches.add(batch(2L, repoB, "b0", "b1", "요약 중에 들어온 커밋"));
+            return SummaryResult.success(List.of(1L),
+                    List.of(new SummaryItem(SummaryStatus.PARTIAL, "로그인 서버 준비", List.of("a1-0"))), null);
+        });
+        given(digestSender.send(eq(CHANNEL_ID), anyList())).willReturn(List.of(9001L));
+
+        DigestSendResult result = service.sendTeam(TEAM_ID);
+
+        assertThat(result.type()).isEqualTo(DigestType.LLM);
+        assertThat(result.itemCount()).isEqualTo(1);
+        assertThat(batches.get(0).getStatus()).isEqualTo(ChangeBatchStatus.SENT);
+        assertThat(batches.get(1).getStatus()).isEqualTo(ChangeBatchStatus.COLLECTED);
+    }
+
+    @Test
+    void 요약한_배치가_그새_발송됐으면_LLM_결과를_버리고_남은_변경을_목록으로_보낸다() {
+        ChangeBatch first = batch(1L, repoA, "a0", "a1", "이미 다른 발송에 포함된 커밋");
+        batches.add(first);
+        batches.add(batch(2L, repoB, "b0", "b1", "남은 커밋"));
+        given(changeSummarizer.summarize(TEAM_ID, LlmCallPurpose.DIGEST)).willAnswer(inv -> {
+            first.markSent(null, null);
+            return SummaryResult.success(List.of(1L, 2L),
+                    List.of(new SummaryItem(SummaryStatus.PARTIAL, "로그인", List.of("a1-0", "b1-0"))), null);
+        });
+        given(digestSender.send(eq(CHANNEL_ID), anyList())).willReturn(List.of(9001L));
+
+        DigestSendResult result = service.sendTeam(TEAM_ID);
+
+        assertThat(result.type()).isEqualTo(DigestType.FALLBACK);
+        assertThat(result.summaryFallbackReason()).contains("배치 상태가 바뀌었어요");
+        assertThat(result.itemCount()).isEqualTo(1);
+        assertThat(sentMessages().getFirst().blocks().get(1).text()).contains("남은 커밋").doesNotContain("이미 다른");
+    }
+
     // ---- helpers ----
+
+    private void givenSummary(List<Long> batchIds, SummaryItem... summaryItems) {
+        given(changeSummarizer.summarize(TEAM_ID, LlmCallPurpose.DIGEST))
+                .willReturn(SummaryResult.success(batchIds, List.of(summaryItems), null));
+    }
+
+    private List<Long> collectedIds() {
+        return batches.stream()
+                .filter(b -> b.getStatus() == ChangeBatchStatus.COLLECTED)
+                .map(ChangeBatch::getId)
+                .toList();
+    }
 
     private <T> T store(T entity, Map<Long, T> table) {
         Object id = ReflectionTestUtils.getField(entity, "id");

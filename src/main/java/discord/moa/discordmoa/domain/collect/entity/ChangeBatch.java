@@ -1,5 +1,6 @@
 package discord.moa.discordmoa.domain.collect.entity;
 
+import discord.moa.discordmoa.domain.digest.entity.Digest;
 import discord.moa.discordmoa.domain.digest.entity.DigestItem;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import jakarta.persistence.Column;
@@ -61,6 +62,12 @@ public class ChangeBatch {
     @Column(nullable = false)
     private List<FileChange> files;
 
+    // 이 배치를 담아 발송한 Digest
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "digest_id")
+    private Digest digest;
+
+    // FALLBACK 발송일 때만 채운다. LLM 항목은 한 배치의 커밋이 여러 항목에 나뉠 수 있어서 연결하지 않는다
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "digest_item_id")
     private DigestItem digestItem;
@@ -79,8 +86,9 @@ public class ChangeBatch {
         this.files = files;
     }
 
-    public void markSent(DigestItem digestItem) {
+    public void markSent(Digest digest, DigestItem digestItem) {
         this.status = ChangeBatchStatus.SENT;
+        this.digest = digest;
         this.digestItem = digestItem;
     }
 }
