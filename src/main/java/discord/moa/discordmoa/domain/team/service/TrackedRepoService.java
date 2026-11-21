@@ -11,6 +11,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
+import java.util.Optional;
+
 @Service
 public class TrackedRepoService {
 
@@ -29,7 +31,10 @@ public class TrackedRepoService {
         this.installUrl = installUrl;
     }
 
-    public TrackedRepo register(Long channelId, String url) {
+    /**
+     * 같은 팀이 이미 등록한 레포를 다시 등록하면(App 재설치 후 등) 설치 ID만 갱신한다. 다른 팀의 레포면 거절한다.
+     */
+    public RepoRegistration register(Long channelId, String url) {
         Team team = teamRepository.findByDiscordChannelId(channelId)
                 .orElseThrow(() -> new IllegalStateException(
                         "팀 채팅방에서만 레포를 등록할 수 있어요. 이 채널이 팀으로 등록돼 있는지 운영진에게 확인해 주세요."));
@@ -42,8 +47,15 @@ public class TrackedRepoService {
         GitHubRepo repo = gitHubClient.findRepo(installationId, address.owner(), address.repo())
                 .orElseThrow(() -> new IllegalStateException(notAccessibleMessage(address)));
 
-        if (trackedRepoRepository.existsByGithubRepoId(repo.id())) {
-            throw alreadyRegistered(repo);
+        Optional<TrackedRepo> existing = trackedRepoRepository.findByGithubRepoId(repo.id());
+        if (existing.isPresent()) {
+            TrackedRepo registered = existing.get();
+            if (!registered.getTeam().getId().equals(team.getId())) {
+                throw alreadyRegistered(repo);
+            }
+            trackedRepoRepository.updateInstallationId(registered.getId(), installationId);
+            registered.changeInstallationId(installationId);
+            return new RepoRegistration(registered, true);
         }
 
         String headSha = gitHubClient
@@ -51,8 +63,8 @@ public class TrackedRepoService {
                 .orElse(null);
 
         try {
-            return trackedRepoRepository.save(new TrackedRepo(
-                    team, repo.id(), repo.fullName(), repo.defaultBranch(), headSha, installationId));
+            return new RepoRegistration(trackedRepoRepository.save(new TrackedRepo(
+                    team, repo.id(), repo.fullName(), repo.defaultBranch(), headSha, installationId)), false);
         } catch (DataIntegrityViolationException e) {
             throw alreadyRegistered(repo);
         }

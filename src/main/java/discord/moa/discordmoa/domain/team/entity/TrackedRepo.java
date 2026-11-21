@@ -49,4 +49,11 @@ public class TrackedRepo {
         this.lastProcessedSha = lastProcessedSha;
         this.installationId = installationId;
     }
+
+    /**
+     * App을 다시 설치하면 설치 ID가 바뀐다. DB 반영은 TrackedRepoRepository.updateInstallationId로 한다.
+     */
+    public void changeInstallationId(Long installationId) {
+        this.installationId = installationId;
+    }
 }

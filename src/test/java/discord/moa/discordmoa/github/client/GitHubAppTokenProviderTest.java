@@ -4,6 +4,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.web.client.RestClient;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -26,7 +27,7 @@ class GitHubAppTokenProviderTest {
     void PKCS8_키로_RS256_App_JWT를_만든다() throws Exception {
         KeyPair keyPair = KeyPairGenerator.getInstance("RSA").generateKeyPair();
         Path keyFile = writePem(keyPair, "PRIVATE KEY");
-        GitHubAppTokenProvider provider = new GitHubAppTokenProvider("12345", keyFile.toString());
+        GitHubAppTokenProvider provider = new GitHubAppTokenProvider(RestClient.create(), "12345", keyFile.toString());
 
         Instant now = Instant.now();
         String jwt = provider.createAppJwt();
@@ -50,7 +51,7 @@ class GitHubAppTokenProviderTest {
 
     @Test
     void 키_파일이_없으면_절대_경로를_알려준다() {
-        assertThatThrownBy(() -> new GitHubAppTokenProvider("12345", tempDir.resolve("missing.pem").toString()))
+        assertThatThrownBy(() -> new GitHubAppTokenProvider(RestClient.create(), "12345", tempDir.resolve("missing.pem").toString()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(tempDir.resolve("missing.pem").toString());
     }
@@ -60,7 +61,7 @@ class GitHubAppTokenProviderTest {
         Path keyFile = tempDir.resolve("pkcs1.pem");
         Files.writeString(keyFile, "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n");
 
-        assertThatThrownBy(() -> new GitHubAppTokenProvider("12345", keyFile.toString()))
+        assertThatThrownBy(() -> new GitHubAppTokenProvider(RestClient.create(), "12345", keyFile.toString()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("openssl pkcs8");
     }

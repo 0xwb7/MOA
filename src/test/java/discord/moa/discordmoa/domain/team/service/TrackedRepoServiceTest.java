@@ -13,6 +13,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Optional;
 
@@ -48,17 +49,20 @@ class TrackedRepoServiceTest {
     void setUp() {
         service = new TrackedRepoService(trackedRepoRepository, teamRepository, gitHubClient, INSTALL_URL);
         team = new Team("모아팀", CHANNEL_ID, 1L);
+        ReflectionTestUtils.setField(team, "id", 10L);
     }
 
     @Test
     void 정상_등록하면_설치ID와_기본브랜치_최신SHA를_저장한다() {
         givenTeamChannel();
         givenInstalledRepo();
-        given(trackedRepoRepository.existsByGithubRepoId(42L)).willReturn(false);
+        given(trackedRepoRepository.findByGithubRepoId(42L)).willReturn(Optional.empty());
         given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "repo", "main")).willReturn(Optional.of(SHA));
         given(trackedRepoRepository.save(any(TrackedRepo.class))).willAnswer(inv -> inv.getArgument(0));
 
-        TrackedRepo result = service.register(CHANNEL_ID, URL);
+        RepoRegistration registration = service.register(CHANNEL_ID, URL);
+        TrackedRepo result = registration.repo();
+        assertThat(registration.refreshed()).isFalse();
 
         ArgumentCaptor<TrackedRepo> captor = ArgumentCaptor.forClass(TrackedRepo.class);
         verify(trackedRepoRepository).save(captor.capture());
@@ -120,23 +124,47 @@ class TrackedRepoServiceTest {
     }
 
     @Test
-    void 이미_등록된_레포는_거절한다() {
+    void 다른_팀이_등록한_레포는_거절한다() {
         givenTeamChannel();
         givenInstalledRepo();
-        given(trackedRepoRepository.existsByGithubRepoId(42L)).willReturn(true);
+        Team otherTeam = new Team("다른팀", 200L, 2L);
+        ReflectionTestUtils.setField(otherTeam, "id", 20L);
+        given(trackedRepoRepository.findByGithubRepoId(42L))
+                .willReturn(Optional.of(new TrackedRepo(otherTeam, 42L, "owner/repo", "main", SHA, 111L)));
 
         assertThatThrownBy(() -> service.register(CHANNEL_ID, URL))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("이미 등록된 레포");
 
         verify(trackedRepoRepository, never()).save(any());
+        verify(trackedRepoRepository, never()).updateInstallationId(any(), any());
+    }
+
+    @Test
+    void 같은_팀이_다시_등록하면_설치_ID만_갱신하고_수집_위치는_유지한다() {
+        givenTeamChannel();
+        givenInstalledRepo();
+        String oldCursor = "c".repeat(40);
+        TrackedRepo registered = new TrackedRepo(team, 42L, "owner/repo", "main", oldCursor, 111L);
+        ReflectionTestUtils.setField(registered, "id", 5L);
+        given(trackedRepoRepository.findByGithubRepoId(42L)).willReturn(Optional.of(registered));
+
+        RepoRegistration registration = service.register(CHANNEL_ID, URL);
+
+        assertThat(registration.refreshed()).isTrue();
+        assertThat(registration.repo()).isSameAs(registered);
+        assertThat(registered.getInstallationId()).isEqualTo(INSTALLATION_ID);
+        assertThat(registered.getLastProcessedSha()).isEqualTo(oldCursor);
+        verify(trackedRepoRepository).updateInstallationId(5L, INSTALLATION_ID);
+        verify(trackedRepoRepository, never()).save(any());
+        verify(gitHubClient, never()).findHeadSha(any(), any(), any(), any());
     }
 
     @Test
     void 동시_등록으로_unique_제약에_걸리면_중복_등록으로_안내한다() {
         givenTeamChannel();
         givenInstalledRepo();
-        given(trackedRepoRepository.existsByGithubRepoId(42L)).willReturn(false);
+        given(trackedRepoRepository.findByGithubRepoId(42L)).willReturn(Optional.empty());
         given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "repo", "main")).willReturn(Optional.of(SHA));
         given(trackedRepoRepository.save(any(TrackedRepo.class)))
                 .willThrow(new DataIntegrityViolationException("duplicate"));
@@ -150,11 +178,11 @@ class TrackedRepoServiceTest {
     void 커밋이_없는_빈_레포는_SHA_null로_등록에_성공한다() {
         givenTeamChannel();
         givenInstalledRepo();
-        given(trackedRepoRepository.existsByGithubRepoId(42L)).willReturn(false);
+        given(trackedRepoRepository.findByGithubRepoId(42L)).willReturn(Optional.empty());
         given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "repo", "main")).willReturn(Optional.empty());
         given(trackedRepoRepository.save(any(TrackedRepo.class))).willAnswer(inv -> inv.getArgument(0));
 
-        TrackedRepo result = service.register(CHANNEL_ID, URL);
+        TrackedRepo result = service.register(CHANNEL_ID, URL).repo();
 
         assertThat(result.getLastProcessedSha()).isNull();
         assertThat(result.getGithubRepoId()).isEqualTo(42L);

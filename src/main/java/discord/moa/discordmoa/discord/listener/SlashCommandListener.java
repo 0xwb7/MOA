@@ -10,22 +10,25 @@ import discord.moa.discordmoa.domain.digest.service.DigestService;
 import discord.moa.discordmoa.domain.summary.service.ChangeSummarizer;
 import discord.moa.discordmoa.domain.summary.service.SummaryPreview;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
+import discord.moa.discordmoa.domain.team.service.RepoRegistration;
 import discord.moa.discordmoa.domain.team.service.TeamService;
 import discord.moa.discordmoa.domain.team.service.TrackedRepoService;
-import lombok.RequiredArgsConstructor;
+import discord.moa.discordmoa.global.config.DiscordTaskConfig;
 import lombok.extern.slf4j.Slf4j;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class SlashCommandListener extends ListenerAdapter {
+
+    static final String UNEXPECTED_ERROR = "⚠️ 처리 중 문제가 생겼어요. 잠시 후 다시 시도해 주세요.";
 
     private final AccountLinkService accountLinkService;
     private final TeamService teamService;
@@ -34,8 +37,21 @@ public class SlashCommandListener extends ListenerAdapter {
     private final DigestService digestService;
     private final ChangeSummarizer changeSummarizer;
 
-    // LLM 요약은 수 분까지 걸릴 수 있어서 JDA 이벤트 스레드를 막지 않도록 따로 실행한다
-    private final ExecutorService longTasks = Executors.newVirtualThreadPerTaskExecutor();
+    // GitHub·LLM 호출은 오래 걸릴 수 있어서 JDA 이벤트 스레드를 막지 않도록 따로 실행한다
+    private final ExecutorService longTasks;
+
+    public SlashCommandListener(AccountLinkService accountLinkService, TeamService teamService,
+                                TrackedRepoService trackedRepoService, ChangeCollector changeCollector,
+                                DigestService digestService, ChangeSummarizer changeSummarizer,
+                                @Qualifier(DiscordTaskConfig.DISCORD_TASK_EXECUTOR) ExecutorService longTasks) {
+        this.accountLinkService = accountLinkService;
+        this.teamService = teamService;
+        this.trackedRepoService = trackedRepoService;
+        this.changeCollector = changeCollector;
+        this.digestService = digestService;
+        this.changeSummarizer = changeSummarizer;
+        this.longTasks = longTasks;
+    }
 
     @Override
     public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
@@ -59,12 +75,18 @@ public class SlashCommandListener extends ListenerAdapter {
         event.deferReply(true).queue();
 
         String login = event.getOption("github").getAsString();
-        try {
-            String linked = accountLinkService.link(event.getUser().getIdLong(), login);
-            event.getHook().sendMessage("✅ " + linked + " 계정이 연동됐어요.").queue();
-        } catch (IllegalArgumentException | IllegalStateException e) {
-            event.getHook().sendMessage("⚠️ " + e.getMessage()).queue();
-        }
+        long userId = event.getUser().getIdLong();
+        runLong(event, () -> {
+            try {
+                String linked = accountLinkService.link(userId, login);
+                event.getHook().sendMessage("✅ " + linked + " 계정이 연동됐어요.").queue();
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                event.getHook().sendMessage("⚠️ " + e.getMessage()).queue();
+            } catch (RuntimeException e) {
+                log.error("GitHub 계정 연동 중 오류: userId={}, login={}", userId, login, e);
+                event.getHook().sendMessage(UNEXPECTED_ERROR).queue();
+            }
+        });
     }
 
     private void handleTeamRegister(SlashCommandInteractionEvent event) {
@@ -77,6 +99,9 @@ public class SlashCommandListener extends ListenerAdapter {
             event.reply("✅ '" + name + "' 등록이 완료됐어요.").setEphemeral(true).queue();
         } catch (IllegalStateException e) {
             event.reply("⚠️ " + e.getMessage()).setEphemeral(true).queue();
+        } catch (RuntimeException e) {
+            log.error("팀 등록 중 오류: name={}, channelId={}", name, channelId, e);
+            event.reply(UNEXPECTED_ERROR).setEphemeral(true).queue();
         }
     }
 
@@ -84,44 +109,62 @@ public class SlashCommandListener extends ListenerAdapter {
         event.deferReply(true).queue();
 
         String url = event.getOption("url").getAsString();
-        try {
-            TrackedRepo repo = trackedRepoService.register(event.getChannel().getIdLong(), url);
-            String baseline = repo.getLastProcessedSha() == null
-                    ? "아직 커밋이 없는 레포라서 첫 커밋부터 수집할게요."
-                    : "지금 이후의 변경부터 수집할게요.";
-            event.getHook().sendMessage("✅ " + repo.getFullName() + " 레포가 등록됐어요. ("
-                    + repo.getDefaultBranch() + " 브랜치) " + baseline).queue();
-        } catch (IllegalArgumentException | IllegalStateException e) {
-            event.getHook().sendMessage("⚠️ " + e.getMessage()).queue();
-        } catch (RestClientException e) {
-            log.warn("레포 등록 중 GitHub API 호출 실패: url={}", url, e);
-            event.getHook().sendMessage("⚠️ GitHub와 통신하는 중 문제가 생겼어요. 잠시 후 다시 시도해 주세요.").queue();
-        }
+        long channelId = event.getChannel().getIdLong();
+        runLong(event, () -> {
+            try {
+                RepoRegistration registration = trackedRepoService.register(channelId, url);
+                TrackedRepo repo = registration.repo();
+                if (registration.refreshed()) {
+                    event.getHook().sendMessage("✅ " + repo.getFullName()
+                            + " 설치 정보를 갱신했어요. 이전 수집 위치부터 이어서 수집해요.").queue();
+                    return;
+                }
+                String baseline = repo.getLastProcessedSha() == null
+                        ? "아직 커밋이 없는 레포라서 첫 커밋부터 수집할게요."
+                        : "지금 이후의 변경부터 수집할게요.";
+                event.getHook().sendMessage("✅ " + repo.getFullName() + " 레포가 등록됐어요. ("
+                        + repo.getDefaultBranch() + " 브랜치) " + baseline).queue();
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                event.getHook().sendMessage("⚠️ " + e.getMessage()).queue();
+            } catch (RestClientException e) {
+                log.warn("레포 등록 중 GitHub API 호출 실패: url={}", url, e);
+                event.getHook().sendMessage("⚠️ GitHub와 통신하는 중 문제가 생겼어요. 잠시 후 다시 시도해 주세요.").queue();
+            } catch (RuntimeException e) {
+                log.error("레포 등록 중 오류: url={}, channelId={}", url, channelId, e);
+                event.getHook().sendMessage(UNEXPECTED_ERROR).queue();
+            }
+        });
     }
 
     private void handleCollectTest(SlashCommandInteractionEvent event) {
         event.deferReply(true).queue();
 
-        try {
-            TeamCollectResult result = changeCollector.collectTeamByChannel(event.getChannel().getIdLong());
-            if (result.repos().isEmpty()) {
-                event.getHook().sendMessage("⚠️ '" + result.teamName() + "' 팀에 등록된 레포가 없어요. /레포등록 으로 먼저 등록해 주세요.").queue();
-                return;
-            }
+        long channelId = event.getChannel().getIdLong();
+        runLong(event, () -> {
+            try {
+                TeamCollectResult result = changeCollector.collectTeamByChannel(channelId);
+                if (result.repos().isEmpty()) {
+                    event.getHook().sendMessage("⚠️ '" + result.teamName() + "' 팀에 등록된 레포가 없어요. /레포등록 으로 먼저 등록해 주세요.").queue();
+                    return;
+                }
 
-            StringBuilder message = new StringBuilder("✅ '" + result.teamName() + "' 팀 수집 결과\n");
-            result.repos().forEach(repo -> message.append("• ").append(describe(repo)).append('\n'));
-            event.getHook().sendMessage(message.toString()).queue();
-        } catch (IllegalStateException e) {
-            event.getHook().sendMessage("⚠️ " + e.getMessage()).queue();
-        }
+                StringBuilder message = new StringBuilder("✅ '" + result.teamName() + "' 팀 수집 결과\n");
+                result.repos().forEach(repo -> message.append("• ").append(describe(repo)).append('\n'));
+                event.getHook().sendMessage(message.toString()).queue();
+            } catch (IllegalStateException e) {
+                event.getHook().sendMessage("⚠️ " + e.getMessage()).queue();
+            } catch (RuntimeException e) {
+                log.error("수집 테스트 중 오류: channelId={}", channelId, e);
+                event.getHook().sendMessage(UNEXPECTED_ERROR).queue();
+            }
+        });
     }
 
     private void handleSendTest(SlashCommandInteractionEvent event) {
         event.deferReply(true).queue();
 
         long channelId = event.getChannel().getIdLong();
-        longTasks.execute(() -> {
+        runLong(event, () -> {
             try {
                 TeamCollectResult collected = changeCollector.collectTeamByChannel(channelId);
                 DigestSendResult sent = digestService.sendTeamByChannel(channelId);
@@ -143,7 +186,7 @@ public class SlashCommandListener extends ListenerAdapter {
         event.deferReply(true).queue();
 
         long channelId = event.getChannel().getIdLong();
-        longTasks.execute(() -> {
+        runLong(event, () -> {
             try {
                 SummaryPreview preview = changeSummarizer.previewByChannel(channelId);
                 event.getHook().sendMessage(SummaryPreviewMessage.format(preview)).queue();
@@ -154,6 +197,18 @@ public class SlashCommandListener extends ListenerAdapter {
                 event.getHook().sendMessage("⚠️ 요약 중 문제가 생겼어요. 서버 로그를 확인해 주세요.").queue();
             }
         });
+    }
+
+    /**
+     * deferReply 뒤에 호출한다. 종료 중이라 작업을 받지 못하면 바로 안내한다.
+     */
+    private void runLong(SlashCommandInteractionEvent event, Runnable task) {
+        try {
+            longTasks.execute(task);
+        } catch (RejectedExecutionException e) {
+            log.warn("명령 처리를 시작하지 못했어요 (서버 종료 중): command={}", event.getName(), e);
+            event.getHook().sendMessage(UNEXPECTED_ERROR).queue();
+        }
     }
 
     private String describeSend(DigestSendResult result) {
@@ -177,7 +232,7 @@ public class SlashCommandListener extends ListenerAdapter {
                     + " | force push " + yesNo(repo.forcePushDetected())
                     + " | 잘림 " + yesNo(repo.truncated());
             case NO_CHANGE -> repo.repoFullName() + ": 변경 없음";
-            case FAILED -> repo.repoFullName() + ": ❌ 수집 실패 (서버 로그를 확인해 주세요)";
+            case FAILED -> repo.repoFullName() + ": ❌ 수집 실패: " + repo.failureReason();
         };
     }
 

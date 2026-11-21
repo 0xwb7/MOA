@@ -2,8 +2,10 @@ package discord.moa.discordmoa.github.client;
 
 import discord.moa.discordmoa.github.dto.GitHubAccessToken;
 import io.jsonwebtoken.Jwts;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
 import java.io.IOException;
@@ -27,14 +29,16 @@ public class GitHubAppTokenProvider {
     private static final Duration JWT_LIFETIME = Duration.ofSeconds(540);
     private static final Duration REFRESH_BEFORE_EXPIRY = Duration.ofMinutes(5);
 
-    private final RestClient restClient = RestClient.create("https://api.github.com");
+    private final RestClient restClient;
     private final Map<Long, GitHubAccessToken> tokens = new ConcurrentHashMap<>();
 
     private final String appId;
     private final PrivateKey privateKey;
 
-    public GitHubAppTokenProvider(@Value("${github.app-id}") String appId,
+    public GitHubAppTokenProvider(@Qualifier("gitHubRestClient") RestClient restClient,
+                                  @Value("${github.app-id}") String appId,
                                   @Value("${github.private-key-path}") String privateKeyPath) {
+        this.restClient = restClient;
         this.appId = appId;
         this.privateKey = loadPrivateKey(resolvePath(privateKeyPath));
     }
@@ -63,16 +67,28 @@ public class GitHubAppTokenProvider {
         ).token();
     }
 
+    /**
+     * 캐시된 설치 토큰을 버린다. 설치가 해제되면 캐시된 토큰이 401을 받기 때문에, 새로 발급받아 원인을 확인할 때 쓴다.
+     */
+    public void invalidate(Long installationId) {
+        tokens.remove(installationId);
+    }
+
     private boolean isFresh(GitHubAccessToken token) {
         return token.expiresAt().isAfter(Instant.now().plus(REFRESH_BEFORE_EXPIRY));
     }
 
     private GitHubAccessToken issueInstallationToken(Long installationId) {
-        GitHubAccessToken token = restClient.post()
-                .uri("/app/installations/{id}/access_tokens", installationId)
-                .headers(headers -> GitHubHeaders.apply(headers, createAppJwt(), GitHubHeaders.JSON))
-                .retrieve()
-                .body(GitHubAccessToken.class);
+        GitHubAccessToken token;
+        try {
+            token = restClient.post()
+                    .uri("/app/installations/{id}/access_tokens", installationId)
+                    .headers(headers -> GitHubHeaders.apply(headers, createAppJwt(), GitHubHeaders.JSON))
+                    .retrieve()
+                    .body(GitHubAccessToken.class);
+        } catch (HttpClientErrorException.NotFound e) {
+            throw new GitHubInstallationGoneException(installationId, e);
+        }
 
         if (token == null || token.token() == null || token.expiresAt() == null) {
             throw new IllegalStateException("GitHub 설치 토큰 응답이 올바르지 않아요.");

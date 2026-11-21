@@ -8,6 +8,7 @@ import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.domain.team.repository.TeamRepository;
 import discord.moa.discordmoa.domain.team.repository.TrackedRepoRepository;
 import discord.moa.discordmoa.github.client.GitHubClient;
+import discord.moa.discordmoa.github.client.GitHubInstallationGoneException;
 import discord.moa.discordmoa.github.dto.GitHubCommit;
 import discord.moa.discordmoa.github.dto.GitHubCommitPage;
 import discord.moa.discordmoa.github.dto.GitHubCompare;
@@ -15,6 +16,8 @@ import discord.moa.discordmoa.github.dto.GitHubFile;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.ResourceAccessException;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -32,6 +35,11 @@ public class ChangeCollector {
     static final int COMPARE_FILE_LIMIT = 300;
     static final int PATCH_MAX_LENGTH = 10_000;
 
+    static final String INSTALLATION_GONE = "App 설치가 해제됐어요 (레포 주인이 다시 설치해야 해요)";
+    static final String REPO_NOT_ACCESSIBLE = "App이 이 레포에 접근할 수 없어요 (설치 설정에서 레포 선택이 빠졌을 수 있어요)";
+    static final String GITHUB_UNREACHABLE = "GitHub가 응답하지 않아요 (잠시 후 다시 시도해 주세요)";
+    static final String UNKNOWN_FAILURE = "수집 중 오류가 났어요 (서버 로그를 확인해 주세요)";
+
     private static final Set<String> REWRITTEN_HISTORY_STATUSES = Set.of("diverged", "behind");
 
     private final GitHubClient gitHubClient;
@@ -39,7 +47,40 @@ public class ChangeCollector {
     private final TeamRepository teamRepository;
     private final ChangeBatchWriter changeBatchWriter;
 
+    /**
+     * App을 지웠다가 다시 설치해 설치 ID가 바뀌었으면, 새 ID로 갱신하고 한 번만 다시 시도한다.
+     */
     public Optional<ChangeBatch> collect(TrackedRepo repo) {
+        try {
+            return collectOnce(repo);
+        } catch (HttpClientErrorException.Unauthorized e) {
+            // 설치가 해제되면 캐시돼 있던 설치 토큰이 401을 받는다. 토큰을 새로 받아 원인을 확인한다
+            log.info("설치 토큰이 거절돼 새로 받아요: repo={}, installationId={}", repo.getFullName(), repo.getInstallationId());
+            gitHubClient.forgetInstallationToken(repo.getInstallationId());
+            try {
+                return collectOnce(repo);
+            } catch (GitHubInstallationGoneException gone) {
+                return retryWithNewInstallation(repo, gone);
+            }
+        } catch (GitHubInstallationGoneException e) {
+            return retryWithNewInstallation(repo, e);
+        }
+    }
+
+    private Optional<ChangeBatch> retryWithNewInstallation(TrackedRepo repo, GitHubInstallationGoneException gone) {
+        RepoRef ref = RepoRef.of(repo);
+        Long newInstallationId = gitHubClient.findInstallationId(ref.owner(), ref.name())
+                .filter(id -> !id.equals(repo.getInstallationId()))
+                .orElseThrow(() -> gone);
+
+        log.info("GitHub App이 다시 설치돼 설치 ID를 갱신해요: repo={}, {} -> {}",
+                repo.getFullName(), repo.getInstallationId(), newInstallationId);
+        trackedRepoRepository.updateInstallationId(repo.getId(), newInstallationId);
+        repo.changeInstallationId(newInstallationId);
+        return collectOnce(repo);
+    }
+
+    private Optional<ChangeBatch> collectOnce(TrackedRepo repo) {
         RepoRef ref = RepoRef.of(repo);
 
         Optional<String> head = gitHubClient.findHeadSha(ref.installationId(), ref.owner(), ref.name(), repo.getDefaultBranch());
@@ -74,11 +115,29 @@ public class ChangeCollector {
                         .map(batch -> RepoCollectResult.collected(repo.getFullName(), batch))
                         .orElseGet(() -> RepoCollectResult.noChange(repo.getFullName())));
             } catch (RuntimeException e) {
-                log.error("레포 변경 수집 실패: repo={}", repo.getFullName(), e);
-                results.add(RepoCollectResult.failed(repo.getFullName()));
+                String reason = describeFailure(e);
+                if (reason.equals(UNKNOWN_FAILURE)) {
+                    log.error("레포 변경 수집 실패: repo={}", repo.getFullName(), e);
+                } else {
+                    log.warn("레포 변경 수집 실패: repo={}, reason={}, error={}", repo.getFullName(), reason, e.toString());
+                }
+                results.add(RepoCollectResult.failed(repo.getFullName(), reason));
             }
         }
         return results;
+    }
+
+    static String describeFailure(RuntimeException e) {
+        if (e instanceof GitHubInstallationGoneException) {
+            return INSTALLATION_GONE;
+        }
+        if (e instanceof HttpClientErrorException.NotFound) {
+            return REPO_NOT_ACCESSIBLE;
+        }
+        if (e instanceof ResourceAccessException) {
+            return GITHUB_UNREACHABLE;
+        }
+        return UNKNOWN_FAILURE;
     }
 
     public TeamCollectResult collectTeamByChannel(Long channelId) {

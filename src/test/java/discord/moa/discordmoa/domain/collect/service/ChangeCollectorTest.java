@@ -9,6 +9,7 @@ import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.domain.team.repository.TeamRepository;
 import discord.moa.discordmoa.domain.team.repository.TrackedRepoRepository;
 import discord.moa.discordmoa.github.client.GitHubClient;
+import discord.moa.discordmoa.github.client.GitHubInstallationGoneException;
 import discord.moa.discordmoa.github.dto.GitHubCommit;
 import discord.moa.discordmoa.github.dto.GitHubCommitPage;
 import discord.moa.discordmoa.github.dto.GitHubCompare;
@@ -21,9 +22,14 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.RestClientException;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -44,6 +50,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 class ChangeCollectorTest {
 
     private static final Long INSTALLATION_ID = 555L;
+    private static final Long NEW_INSTALLATION_ID = 777L;
     private static final String BASE = "b".repeat(40);
     private static final String HEAD = "h".repeat(40);
     private static final Instant T1 = Instant.parse("2026-11-17T01:00:00Z");
@@ -315,9 +322,10 @@ class ChangeCollectorTest {
         List<RepoCollectResult> results = collector.collectTeam(10L);
 
         assertThat(results).containsExactly(
-                new RepoCollectResult("owner/broken", RepoCollectResult.Outcome.FAILED, 0, 0, false, false),
-                new RepoCollectResult("owner/healthy", RepoCollectResult.Outcome.COLLECTED, 1, 1, false, false),
-                new RepoCollectResult("owner/quiet", RepoCollectResult.Outcome.NO_CHANGE, 0, 0, false, false));
+                new RepoCollectResult("owner/broken", RepoCollectResult.Outcome.FAILED, 0, 0, false, false,
+                        ChangeCollector.UNKNOWN_FAILURE),
+                new RepoCollectResult("owner/healthy", RepoCollectResult.Outcome.COLLECTED, 1, 1, false, false, null),
+                new RepoCollectResult("owner/quiet", RepoCollectResult.Outcome.NO_CHANGE, 0, 0, false, false, null));
     }
 
     @Test
@@ -331,7 +339,115 @@ class ChangeCollectorTest {
         verifyNoInteractions(gitHubClient);
     }
 
+    // ---- App 재설치 / 실패 원인 ----
+
+    @Test
+    void 설치_토큰이_404면_새_설치_ID로_갱신하고_한_번_다시_수집한다() {
+        TrackedRepo repo = repo(1L, "owner/app", BASE);
+        given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "app", "main")).willThrow(gone());
+        given(gitHubClient.findInstallationId("owner", "app")).willReturn(Optional.of(NEW_INSTALLATION_ID));
+        given(gitHubClient.findHeadSha(NEW_INSTALLATION_ID, "owner", "app", "main")).willReturn(Optional.of(HEAD));
+        given(gitHubClient.compare(NEW_INSTALLATION_ID, "owner", "app", BASE, HEAD)).willReturn(Optional.of(new GitHubCompare(
+                "ahead", 1, List.of(commit("c1", "로그인 API", "alice", 11L, T1)), List.of(file("A.java", "added", "+a")))));
+        givenSaveSucceeds();
+        given(trackedRepoRepository.advanceCursor(1L, BASE, HEAD)).willReturn(1);
+
+        ChangeBatch batch = collector.collect(repo).orElseThrow();
+
+        verify(trackedRepoRepository).updateInstallationId(1L, NEW_INSTALLATION_ID);
+        assertThat(repo.getInstallationId()).isEqualTo(NEW_INSTALLATION_ID);
+        assertThat(batch.getCommits()).extracting(CommitSnapshot::sha).containsExactly("c1");
+    }
+
+    @Test
+    void 다시_설치되지_않았으면_설치_해제를_원인으로_실패한다() {
+        TrackedRepo repo = repo(1L, "owner/app", BASE);
+        given(trackedRepoRepository.findAllByTeamId(10L)).willReturn(List.of(repo));
+        given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "app", "main")).willThrow(gone());
+        given(gitHubClient.findInstallationId("owner", "app")).willReturn(Optional.empty());
+
+        List<RepoCollectResult> results = collector.collectTeam(10L);
+
+        assertThat(results).singleElement().satisfies(result -> {
+            assertThat(result.outcome()).isEqualTo(RepoCollectResult.Outcome.FAILED);
+            assertThat(result.failureReason()).isEqualTo(ChangeCollector.INSTALLATION_GONE)
+                    .contains("App 설치가 해제됐어요");
+        });
+        verify(trackedRepoRepository, never()).updateInstallationId(any(), any());
+        assertThat(repo.getInstallationId()).isEqualTo(INSTALLATION_ID);
+    }
+
+    @Test
+    void 재조회한_설치_ID가_예전과_같으면_다시_시도하지_않는다() {
+        TrackedRepo repo = repo(1L, "owner/app", BASE);
+        given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "app", "main")).willThrow(gone());
+        given(gitHubClient.findInstallationId("owner", "app")).willReturn(Optional.of(INSTALLATION_ID));
+
+        assertThatThrownBy(() -> collector.collect(repo)).isInstanceOf(GitHubInstallationGoneException.class);
+        verify(trackedRepoRepository, never()).updateInstallationId(any(), any());
+    }
+
+    @Test
+    void 새_설치_ID로도_실패하면_한_번만_시도하고_실패한다() {
+        TrackedRepo repo = repo(1L, "owner/app", BASE);
+        given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "app", "main")).willThrow(gone());
+        given(gitHubClient.findInstallationId("owner", "app")).willReturn(Optional.of(NEW_INSTALLATION_ID));
+        given(gitHubClient.findHeadSha(NEW_INSTALLATION_ID, "owner", "app", "main"))
+                .willThrow(new GitHubInstallationGoneException(NEW_INSTALLATION_ID, null));
+
+        assertThatThrownBy(() -> collector.collect(repo)).isInstanceOf(GitHubInstallationGoneException.class);
+        verify(gitHubClient).findInstallationId("owner", "app");
+    }
+
+    @Test
+    void 캐시된_토큰이_401이면_토큰을_버리고_다시_받아_재설치를_확인한다() {
+        TrackedRepo repo = repo(1L, "owner/app", BASE);
+        given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "app", "main"))
+                .willThrow(httpError(HttpStatus.UNAUTHORIZED))
+                .willThrow(gone());
+        given(gitHubClient.findInstallationId("owner", "app")).willReturn(Optional.of(NEW_INSTALLATION_ID));
+        given(gitHubClient.findHeadSha(NEW_INSTALLATION_ID, "owner", "app", "main")).willReturn(Optional.of(BASE));
+
+        assertThat(collector.collect(repo)).isEmpty();
+
+        verify(gitHubClient).forgetInstallationToken(INSTALLATION_ID);
+        verify(trackedRepoRepository).updateInstallationId(1L, NEW_INSTALLATION_ID);
+    }
+
+    @Test
+    void 레포에_접근할_수_없으면_레포_선택_누락을_원인으로_실패한다() {
+        TrackedRepo repo = repo(1L, "owner/app", BASE);
+        given(trackedRepoRepository.findAllByTeamId(10L)).willReturn(List.of(repo));
+        given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "app", "main")).willThrow(httpError(HttpStatus.NOT_FOUND));
+
+        assertThat(collector.collectTeam(10L)).singleElement()
+                .extracting(RepoCollectResult::failureReason)
+                .isEqualTo(ChangeCollector.REPO_NOT_ACCESSIBLE);
+        verify(gitHubClient, never()).findInstallationId(anyString(), anyString());
+    }
+
+    @Test
+    void GitHub가_응답하지_않으면_시간_초과를_원인으로_실패한다() {
+        TrackedRepo repo = repo(1L, "owner/app", BASE);
+        given(trackedRepoRepository.findAllByTeamId(10L)).willReturn(List.of(repo));
+        given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "app", "main"))
+                .willThrow(new ResourceAccessException("Read timed out"));
+
+        assertThat(collector.collectTeam(10L)).singleElement()
+                .extracting(RepoCollectResult::failureReason)
+                .isEqualTo(ChangeCollector.GITHUB_UNREACHABLE);
+    }
+
     // ---- fixtures ----
+
+    private static GitHubInstallationGoneException gone() {
+        return new GitHubInstallationGoneException(INSTALLATION_ID, null);
+    }
+
+    private static HttpClientErrorException httpError(HttpStatus status) {
+        return HttpClientErrorException.create(status, status.getReasonPhrase(), HttpHeaders.EMPTY,
+                "{}".getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8);
+    }
 
     private TrackedRepo repo(Long id, String fullName, String lastProcessedSha) {
         TrackedRepo repo = new TrackedRepo(team, id * 100, fullName, "main", lastProcessedSha, INSTALLATION_ID);

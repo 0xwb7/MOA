@@ -6,7 +6,7 @@ import discord.moa.discordmoa.github.dto.GitHubCompare;
 import discord.moa.discordmoa.github.dto.GitHubInstallation;
 import discord.moa.discordmoa.github.dto.GitHubRepo;
 import discord.moa.discordmoa.github.dto.GitHubUser;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -18,11 +18,19 @@ import java.util.List;
 import java.util.Optional;
 
 @Component
-@RequiredArgsConstructor
 public class GitHubClient {
 
-    private final RestClient restClient = RestClient.create("https://api.github.com");
+    private final RestClient restClient;
     private final GitHubAppTokenProvider tokenProvider;
+
+    public GitHubClient(@Qualifier("gitHubRestClient") RestClient restClient, GitHubAppTokenProvider tokenProvider) {
+        this.restClient = restClient;
+        this.tokenProvider = tokenProvider;
+    }
+
+    public void forgetInstallationToken(Long installationId) {
+        tokenProvider.invalidate(installationId);
+    }
 
     public Optional<GitHubUser> findUser(String login) {
         try {
