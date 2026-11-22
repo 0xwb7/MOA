@@ -27,7 +27,7 @@ final class SummaryPreviewMessage {
             return title + "아직 발송하지 않은 수집 변경이 없어요. /수집테스트 로 먼저 수집해 주세요.";
         }
 
-        String footer = "\n" + stats(result.stats());
+        String footer = "";
         List<String> body = new ArrayList<>();
         if (result.succeeded()) {
             result.items().forEach(item -> body.add(line(item)));
