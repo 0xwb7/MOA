@@ -39,6 +39,9 @@ public class CommandRegistrar {
                                 .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER)),
 
                         Commands.slash("회차상태", "이 채널 팀의 다음 정기 회차와 직전 회차 결과를 보여줘요 (운영진 전용)")
+                                .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER)),
+
+                        Commands.slash("운영알림테스트", "운영진 알림 채널로 테스트 알림을 보내요 (운영진 전용)")
                                 .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER))
                 )
                 .queue();

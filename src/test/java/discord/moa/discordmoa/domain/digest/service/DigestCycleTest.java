@@ -5,6 +5,7 @@ import discord.moa.discordmoa.domain.collect.entity.ChangeBatchStatus;
 import discord.moa.discordmoa.domain.collect.entity.CommitSnapshot;
 import discord.moa.discordmoa.domain.collect.repository.ChangeBatchRepository;
 import discord.moa.discordmoa.domain.collect.service.ChangeCollector;
+import discord.moa.discordmoa.domain.collect.service.RepoCollectResult;
 import discord.moa.discordmoa.domain.digest.entity.CycleKind;
 import discord.moa.discordmoa.domain.digest.entity.Digest;
 import discord.moa.discordmoa.domain.digest.entity.DigestItem;
@@ -215,7 +216,7 @@ class DigestCycleTest {
 
         preparer.prepareCycle(CYCLE);
         preparer.prepareCycle(CYCLE);
-        assertThat(preparer.prepareTeam(team.getId(), CYCLE, CycleKind.SCHEDULED)).isEmpty();
+        assertThat(preparer.prepareTeam(team, CYCLE, CycleKind.SCHEDULED)).isEmpty();
 
         verify(changeSummarizer, times(1)).summarize(team.getId(), LlmCallPurpose.DIGEST);
         assertThat(digestRepository.findAll()).hasSize(1);
@@ -237,6 +238,7 @@ class DigestCycleTest {
         clock.set(CYCLE);
         service.sendScheduled(team, CYCLE);
 
+        verify(opsNotifier, never()).notify(any());   // 변경 없음은 알림 대상이 아니다
         DigestMessage message = sentMessages().getFirst();
         assertThat(message.mentionUserId()).isNull();
         assertThat(message.blocks()).singleElement().satisfies(block -> {
@@ -294,9 +296,9 @@ class DigestCycleTest {
                     List.of(new SummaryItem(SummaryStatus.READY, "늦게 끝난 LLM 요약", List.of(sha(login)))), null);
         });
 
-        Preparation preparation = preparer.prepareTeam(team.getId(), CYCLE, CycleKind.SCHEDULED).orElseThrow();
+        Preparation preparation = preparer.prepareTeam(team, CYCLE, CycleKind.SCHEDULED).orElseThrow();
 
-        assertThat(preparation.savedType()).isEmpty();
+        assertThat(preparation.saved()).isEmpty();
         Digest digest = cycleDigest(CYCLE);
         assertThat(digest.getStatus()).isEqualTo(DigestStatus.SENT);
         assertThat(digest.getType()).isEqualTo(DigestType.FALLBACK);
@@ -353,10 +355,10 @@ class DigestCycleTest {
         Digest otherDigest = digestRepository.findByTeamIdAndScheduledFor(other.getId(), CYCLE).orElseThrow();
         assertThat(otherDigest.getStatus()).isEqualTo(DigestStatus.READY);
         assertThat(batch(otherBatch).getStatus()).isEqualTo(ChangeBatchStatus.PREPARED);
-        assertThat(opsEvents()).singleElement().satisfies(event -> {
-            assertThat(event.type()).isEqualTo(OpsEvent.Type.PREPARE_FAILED);
-            assertThat(event.teamName()).isEqualTo("1팀");
-        });
+        assertThat(opsEvents()).filteredOn(event -> event.teamName().equals("1팀")).singleElement()
+                .extracting(OpsEvent::type).isEqualTo(OpsEvent.Type.PREPARE_FAILED);
+        assertThat(opsEvents()).filteredOn(event -> event.teamName().equals("2팀"))
+                .extracting(OpsEvent::type).containsExactly(OpsEvent.Type.SUMMARY_FALLBACK);
     }
 
     // ---- 발송 실패 ----
@@ -378,7 +380,8 @@ class DigestCycleTest {
         ChangeBatch reverted = batch(login);
         assertThat(reverted.getStatus()).isEqualTo(ChangeBatchStatus.COLLECTED);
         assertThat(reverted.getDigest()).isNull();
-        assertThat(opsEvents()).extracting(OpsEvent::type).containsExactly(OpsEvent.Type.SEND_FAILED);
+        assertThat(opsEvents()).extracting(OpsEvent::type)
+                .containsExactly(OpsEvent.Type.SUMMARY_FALLBACK, OpsEvent.Type.SEND_FAILED);
 
         willReturn(List.of(9100L)).given(digestSender).send(anyLong(), anyList());
         clock.set(kst(20, 30));
@@ -437,7 +440,9 @@ class DigestCycleTest {
 
         assertThat(cycleDigest(CYCLE).getStatus()).isEqualTo(DigestStatus.SENT);
         assertThat(batch(login).getStatus()).isEqualTo(ChangeBatchStatus.SENT);
-        assertThat(opsEvents()).extracting(OpsEvent::type).containsExactly(OpsEvent.Type.RECOVERY_LATE_SEND);
+        // 기본 요약 mock은 '요약 끔' fallback이라 준비 때 SUMMARY_FALLBACK이 먼저 나간다
+        assertThat(opsEvents()).extracting(OpsEvent::type)
+                .containsExactly(OpsEvent.Type.SUMMARY_FALLBACK, OpsEvent.Type.RECOVERY_LATE_SEND);
     }
 
     @Test
@@ -493,7 +498,8 @@ class DigestCycleTest {
         assertThat(digest.getStatus()).isEqualTo(DigestStatus.FAILED);
         assertThat(digest.getFailureReason()).contains("30분 넘게");
         assertThat(batch(login).getStatus()).isEqualTo(ChangeBatchStatus.COLLECTED);
-        assertThat(opsEvents()).extracting(OpsEvent::type).containsExactly(OpsEvent.Type.RECOVERY_ABANDONED);
+        assertThat(opsEvents()).extracting(OpsEvent::type)
+                .containsExactly(OpsEvent.Type.SUMMARY_FALLBACK, OpsEvent.Type.RECOVERY_ABANDONED);
         verify(digestSender, never()).send(anyLong(), anyList());
     }
 
@@ -512,6 +518,82 @@ class DigestCycleTest {
         verify(digestSender, never()).send(anyLong(), anyList());
     }
 
+    // ---- 운영 알림: 레포 수집 실패, LLM 요약 실패 ----
+
+    @Test
+    void 정기_준비에서_레포_수집이_실패하면_원인과_함께_알리고_발송은_그대로_한다() {
+        collected(frontend, "로그인 화면");
+        given(changeCollector.collectTeam(team.getId())).willReturn(List.of(
+                new RepoCollectResult("team1/backend", RepoCollectResult.Outcome.FAILED, 0, 0, false, false,
+                        "App 설치가 해제됐어요 (레포 주인이 다시 설치해야 해요)"),
+                new RepoCollectResult("team1/frontend", RepoCollectResult.Outcome.NO_CHANGE, 0, 0, false, false, null)));
+
+        preparer.prepareCycle(CYCLE);
+        clock.set(CYCLE);
+        service.sendScheduled(team, CYCLE);
+
+        OpsEvent collectFailed = opsEvents().getFirst();
+        assertThat(collectFailed.type()).isEqualTo(OpsEvent.Type.COLLECT_FAILED);
+        assertThat(collectFailed.type().severity()).isEqualTo(OpsEvent.Severity.WARNING);
+        assertThat(collectFailed.teamName()).isEqualTo("1팀");
+        assertThat(collectFailed.scheduledFor()).isEqualTo(CYCLE);
+        assertThat(collectFailed.detail())
+                .contains("team1/backend: App 설치가 해제됐어요 (레포 주인이 다시 설치해야 해요)")
+                .doesNotContain("team1/frontend");
+        assertThat(cycleDigest(CYCLE).getStatus()).isEqualTo(DigestStatus.SENT);
+    }
+
+    @Test
+    void 수동_발송에서는_레포_수집_실패를_운영_알림으로_보내지_않는다() {
+        given(changeCollector.collectTeam(team.getId())).willReturn(List.of(
+                new RepoCollectResult("team1/backend", RepoCollectResult.Outcome.FAILED, 0, 0, false, false, "원인")));
+
+        service.sendNowByChannel(CHANNEL_ID);
+
+        verify(opsNotifier, never()).notify(any());
+    }
+
+    @Test
+    void 정기_준비에서_LLM_요약이_실패해_변경_목록이_되면_사유와_함께_알린다() {
+        collected(backend, "로그인 API 추가");
+        given(changeSummarizer.summarize(anyLong(), any())).willAnswer(inv ->
+                SummaryResult.fallback(collectedIds(), "응답 검증 실패: 입력에 없는 커밋 SHA가 응답에 있어요", null));
+
+        preparer.prepareCycle(CYCLE);
+
+        assertThat(cycleDigest(CYCLE).getType()).isEqualTo(DigestType.FALLBACK);
+        assertThat(opsEvents()).singleElement().satisfies(event -> {
+            assertThat(event.type()).isEqualTo(OpsEvent.Type.SUMMARY_FALLBACK);
+            assertThat(event.type().severity()).isEqualTo(OpsEvent.Severity.WARNING);
+            assertThat(event.detail()).isEqualTo("응답 검증 실패: 입력에 없는 커밋 SHA가 응답에 있어요");
+        });
+    }
+
+    @Test
+    void LLM_일일_상한에_걸려_변경_목록이_되어도_알린다() {
+        collected(backend, "로그인 API 추가");
+        given(changeSummarizer.summarize(anyLong(), any())).willAnswer(inv ->
+                SummaryResult.limitReached(collectedIds(), "오늘 정기 발송용 LLM 호출 상한(60회)에 도달했어요", null));
+
+        preparer.prepareCycle(CYCLE);
+
+        assertThat(opsEvents()).singleElement().satisfies(event -> {
+            assertThat(event.type()).isEqualTo(OpsEvent.Type.SUMMARY_FALLBACK);
+            assertThat(event.detail()).contains("LLM 호출 상한(60회)");
+        });
+    }
+
+    @Test
+    void LLM_요약이_성공하면_운영_알림이_없다() {
+        collected(backend, "로그인 API 추가");
+        givenSummaryLlm(new SummaryStatus[]{SummaryStatus.READY}, "로그인 기능을 써 볼 수 있어요");
+
+        preparer.prepareCycle(CYCLE);
+
+        assertThat(cycleDigest(CYCLE).getType()).isEqualTo(DigestType.LLM);
+        verify(opsNotifier, never()).notify(any());
+    }
+
     // ---- 레포가 없는 팀 ----
 
     @Test
@@ -528,7 +610,7 @@ class DigestCycleTest {
         // 레포가 있는 팀은 기존과 같다
         assertThat(cycleDigest(CYCLE).getStatus()).isEqualTo(DigestStatus.SENT);
         verify(digestSender, times(1)).send(eq(CHANNEL_ID), anyList());
-        verify(opsNotifier, never()).notify(any());
+        assertThat(opsEvents()).extracting(OpsEvent::teamName).containsOnly("1팀");
     }
 
     @Test

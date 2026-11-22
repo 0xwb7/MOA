@@ -93,7 +93,7 @@ public class DigestWriter {
      * @param fallbackReason summary가 null일 때 FALLBACK 사유
      */
     @Transactional
-    public Optional<DigestType> complete(Long digestId, SummaryResult summary, String fallbackReason, Instant now) {
+    public Optional<CompletedDigest> complete(Long digestId, SummaryResult summary, String fallbackReason, Instant now) {
         if (digestRepository.markReadyIfPreparing(digestId, DigestStatus.PREPARING, DigestStatus.READY, now) == 0) {
             return Optional.empty();
         }
@@ -127,16 +127,16 @@ public class DigestWriter {
             saveLlmItems(digest, batches, summary.items());
             digest.fillContent(DigestType.LLM, summaryFormatter.header(team.getName(), team.getPmDiscordUserId()),
                     team.getPmDiscordUserId(), null);
-            return Optional.of(DigestType.LLM);
+            return Optional.of(new CompletedDigest(DigestType.LLM, null));
         }
         if (batches.isEmpty()) {
             digest.fillContent(DigestType.NO_CHANGE, formatter.noChange(team.getName()), null, null);
-            return Optional.of(DigestType.NO_CHANGE);
+            return Optional.of(new CompletedDigest(DigestType.NO_CHANGE, null));
         }
         saveFallbackItems(digest, batches);
         digest.fillContent(DigestType.FALLBACK, formatter.header(team.getName(), team.getPmDiscordUserId()),
                 team.getPmDiscordUserId(), reason);
-        return Optional.of(DigestType.FALLBACK);
+        return Optional.of(new CompletedDigest(DigestType.FALLBACK, reason));
     }
 
     /**

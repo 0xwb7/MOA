@@ -2,6 +2,8 @@ discord:
   token: ${DISCORD_BOT_TOKEN}
   test-guild-id: ${DISCORD_TEST_GUILD_ID}
   digest-buttons-enabled: false   # 확인/질문 버튼 기능이 준비되면 true
+  ops-channel-id: ${DISCORD_OPS_CHANNEL_ID:}   # 운영진 장애 알림 채널. 비우면 서버 로그로만 남김
+  ops-role-id: ${DISCORD_OPS_ROLE_ID:}         # 선택. 🔴 실패 알림에서만 이 역할을 멘션
 
 spring:
   datasource:

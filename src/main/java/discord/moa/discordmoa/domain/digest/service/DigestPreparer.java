@@ -111,7 +111,8 @@ public class DigestPreparer {
      *
      * @return 회차가 이미 처리됐으면(READY/SENT/FAILED) empty
      */
-    public Optional<Preparation> prepareTeam(Long teamId, Instant cycle, CycleKind kind) {
+    public Optional<Preparation> prepareTeam(Team team, Instant cycle, CycleKind kind) {
+        Long teamId = team.getId();
         CycleClaim claim = digestWriter.claimCycle(teamId, cycle, kind, clock.instant());
         if (!claim.isPreparing()) {
             log.info("이미 처리된 회차라 준비하지 않아요: teamId={}, 회차={}, 상태={}", teamId, cycle, claim.status());
@@ -120,10 +121,16 @@ public class DigestPreparer {
 
         try {
             List<RepoCollectResult> collected = changeCollector.collectTeam(teamId);
+            if (kind == CycleKind.SCHEDULED) {
+                notifyCollectFailures(team, cycle, collected);
+            }
             SummaryResult summary = changeSummarizer.summarize(teamId, LlmCallPurpose.DIGEST);
-            Optional<DigestType> saved = digestWriter.complete(claim.digestId(), summary, null, clock.instant());
+            Optional<CompletedDigest> saved = digestWriter.complete(claim.digestId(), summary, null, clock.instant());
             if (saved.isEmpty()) {
                 log.info("준비가 끝났지만 이미 처리된 회차라 결과를 버려요: teamId={}, 회차={}", teamId, cycle);
+            } else if (kind == CycleKind.SCHEDULED && saved.get().type() == DigestType.FALLBACK) {
+                opsNotifier.notify(new OpsEvent(OpsEvent.Type.SUMMARY_FALLBACK, team.getName(), cycle,
+                        saved.get().fallbackReason()));
             }
             return Optional.of(new Preparation(claim.digestId(), collected, saved));
         } catch (RuntimeException e) {
@@ -135,6 +142,20 @@ public class DigestPreparer {
         }
     }
 
+    /**
+     * 정기 준비에서 레포 수집이 실패하면 원인과 함께 알린다 (예: App 설치 해제). 수집 실패는 다른 레포 수집을 막지 않는다.
+     */
+    private void notifyCollectFailures(Team team, Instant cycle, List<RepoCollectResult> collected) {
+        List<String> failures = collected.stream()
+                .filter(result -> result.outcome() == RepoCollectResult.Outcome.FAILED)
+                .map(result -> result.repoFullName() + ": " + result.failureReason())
+                .toList();
+        if (!failures.isEmpty()) {
+            opsNotifier.notify(new OpsEvent(OpsEvent.Type.COLLECT_FAILED, team.getName(), cycle,
+                    "레포 " + failures.size() + "개를 수집하지 못했어요 (이번 회차에서 빠지고 다음 수집 때 다시 시도해요)\n- " + String.join("\n- ", failures)));
+        }
+    }
+
     private void prepareScheduledTeam(Team team, Instant cycle) {
         if (!teamLocks.tryLock(team.getId())) {
             opsNotifier.notify(new OpsEvent(OpsEvent.Type.PREPARE_FAILED, team.getName(), cycle,
@@ -142,7 +163,7 @@ public class DigestPreparer {
             return;
         }
         try {
-            prepareTeam(team.getId(), cycle, CycleKind.SCHEDULED);
+            prepareTeam(team, cycle, CycleKind.SCHEDULED);
         } finally {
             teamLocks.unlock(team.getId());
         }
@@ -155,8 +176,8 @@ public class DigestPreparer {
                 return;   // 마감 직전에 끝났다
             }
             digestWriter.complete(claim.digestId(), null, DEADLINE_REASON, clock.instant())
-                    .ifPresent(type -> opsNotifier.notify(new OpsEvent(OpsEvent.Type.PREPARE_DEADLINE_FALLBACK,
-                            team.getName(), cycle, DEADLINE_REASON + " (유형 " + type + ")")));
+                    .ifPresent(saved -> opsNotifier.notify(new OpsEvent(OpsEvent.Type.PREPARE_DEADLINE_FALLBACK,
+                            team.getName(), cycle, DEADLINE_REASON + " (유형 " + saved.type() + ")")));
         } catch (RuntimeException e) {
             log.error("마감 fallback 저장 실패: team={}, 회차={}", team.getName(), cycle, e);
             opsNotifier.notify(new OpsEvent(OpsEvent.Type.PREPARE_FAILED, team.getName(), cycle,

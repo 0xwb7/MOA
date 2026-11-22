@@ -1,5 +1,6 @@
 package discord.moa.discordmoa.discord.listener;
 
+import discord.moa.discordmoa.discord.ops.DiscordOpsNotifier;
 import discord.moa.discordmoa.domain.account.service.AccountLinkService;
 import discord.moa.discordmoa.domain.collect.service.ChangeCollector;
 import discord.moa.discordmoa.domain.collect.service.RepoCollectResult;
@@ -38,6 +39,7 @@ public class SlashCommandListener extends ListenerAdapter {
     private final ChangeCollector changeCollector;
     private final DigestService digestService;
     private final ChangeSummarizer changeSummarizer;
+    private final DiscordOpsNotifier opsNotifier;
 
     // GitHub·LLM 호출은 오래 걸릴 수 있어서 JDA 이벤트 스레드를 막지 않도록 따로 실행한다
     private final ExecutorService longTasks;
@@ -45,6 +47,7 @@ public class SlashCommandListener extends ListenerAdapter {
     public SlashCommandListener(AccountLinkService accountLinkService, TeamService teamService,
                                 TrackedRepoService trackedRepoService, ChangeCollector changeCollector,
                                 DigestService digestService, ChangeSummarizer changeSummarizer,
+                                DiscordOpsNotifier opsNotifier,
                                 @Qualifier(DiscordTaskConfig.DISCORD_TASK_EXECUTOR) ExecutorService longTasks) {
         this.accountLinkService = accountLinkService;
         this.teamService = teamService;
@@ -52,6 +55,7 @@ public class SlashCommandListener extends ListenerAdapter {
         this.changeCollector = changeCollector;
         this.digestService = digestService;
         this.changeSummarizer = changeSummarizer;
+        this.opsNotifier = opsNotifier;
         this.longTasks = longTasks;
     }
 
@@ -66,6 +70,7 @@ public class SlashCommandListener extends ListenerAdapter {
             case "발송테스트" -> handleSendTest(event);
             case "요약미리보기" -> handleSummaryPreview(event);
             case "회차상태" -> handleCycleStatus(event);
+            case "운영알림테스트" -> handleOpsTest(event);
             default -> event.reply("알 수 없는 명령어예요.").setEphemeral(true).queue();
         }
     }
@@ -197,6 +202,15 @@ public class SlashCommandListener extends ListenerAdapter {
             log.error("회차 상태 조회 중 오류: channelId={}", channelId, e);
             event.reply(UNEXPECTED_ERROR).setEphemeral(true).queue();
         }
+    }
+
+    private void handleOpsTest(SlashCommandInteractionEvent event) {
+        event.deferReply(true).queue();
+        // 비동기로 보내고 결과가 오면 응답한다 (이벤트 스레드를 막지 않음)
+        opsNotifier.sendTest(event.getUser().getName()).whenComplete((result, error) -> {
+            String message = error == null ? result.describe() : UNEXPECTED_ERROR;
+            event.getHook().sendMessage(message).queue();
+        });
     }
 
     private void handleSummaryPreview(SlashCommandInteractionEvent event) {

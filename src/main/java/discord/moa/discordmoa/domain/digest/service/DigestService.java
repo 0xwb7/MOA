@@ -120,8 +120,8 @@ public class DigestService {
             if (claim.isPreparing()) {
                 String reason = claim.created() ? INLINE_NO_DIGEST_REASON : INLINE_PREPARING_REASON;
                 digestWriter.complete(claim.digestId(), null, reason, clock.instant())
-                        .ifPresent(type -> opsNotifier.notify(new OpsEvent(OpsEvent.Type.SEND_INLINE_FALLBACK,
-                                team.getName(), cycle, reason + " (유형 " + type + ")")));
+                        .ifPresent(saved -> opsNotifier.notify(new OpsEvent(OpsEvent.Type.SEND_INLINE_FALLBACK,
+                                team.getName(), cycle, reason + " (유형 " + saved.type() + ")")));
             }
             return deliver(claim.digestId());
         } finally {
@@ -151,7 +151,7 @@ public class DigestService {
         }
         return teamLocks.callIfFree(team.getId(), team.getName(), () -> {
             Instant cycle = clock.instant().truncatedTo(ChronoUnit.MILLIS);
-            Preparation preparation = digestPreparer.prepareTeam(team.getId(), cycle, CycleKind.MANUAL)
+            Preparation preparation = digestPreparer.prepareTeam(team, cycle, CycleKind.MANUAL)
                     .orElseThrow(() -> new IllegalStateException("같은 시각의 회차가 이미 있어요. 잠시 후 다시 시도해 주세요."));
             DigestSendResult sent = deliver(preparation.digestId())
                     .orElseThrow(() -> new IllegalStateException("발송을 시작하지 못했어요. 잠시 후 다시 시도해 주세요."));
