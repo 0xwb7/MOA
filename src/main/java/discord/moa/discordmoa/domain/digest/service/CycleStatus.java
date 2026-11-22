@@ -28,11 +28,13 @@ public record CycleStatus(
             DigestType type,
             Instant sentAt,
             String failureReason,
-            String fallbackReason
+            String fallbackReason,
+            long deliveredItems,    // 실제로 전달된 항목 수
+            long confirmedItems     // 그중 PM이 "확인했어요"를 누른 항목 수
     ) {
-        static Result of(Digest digest) {
+        static Result of(Digest digest, long deliveredItems, long confirmedItems) {
             return new Result(digest.getScheduledFor(), digest.getStatus(), digest.getType(), digest.getSentAt(),
-                    digest.getFailureReason(), digest.getFallbackReason());
+                    digest.getFailureReason(), digest.getFallbackReason(), deliveredItems, confirmedItems);
         }
     }
 }

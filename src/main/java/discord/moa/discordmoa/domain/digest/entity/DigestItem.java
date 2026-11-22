@@ -45,7 +45,10 @@ public class DigestItem {
 
     private Long discordMessageId;
 
+    // PM이 "확인했어요"를 누른 시각과 누른 사람(Discord 사용자 ID). DigestItemRepository.confirm으로만 채운다
     private Instant confirmedAt;
+
+    private Long confirmedBy;
 
     public DigestItem(Digest digest, TrackedRepo trackedRepo, String text, List<String> commitShas) {
         this.digest = digest;

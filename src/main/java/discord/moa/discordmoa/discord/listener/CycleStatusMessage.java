@@ -59,6 +59,9 @@ final class CycleStatusMessage {
             text.append(" · 발송 ").append(TIME_SEC.format(result.sentAt()));
         }
         text.append('\n');
+        if (result.deliveredItems() > 0) {
+            text.append("- PM 확인 ").append(result.confirmedItems()).append('/').append(result.deliveredItems()).append('\n');
+        }
         if (result.failureReason() != null) {
             text.append("- 실패 원인: ").append(MarkdownSanitizer.escape(result.failureReason())).append('\n');
         }

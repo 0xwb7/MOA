@@ -34,12 +34,15 @@ public class JdaDigestSender implements DigestSender {
     static final String ASK_LABEL = "개발자에게 질문하기";
 
     private final JDA jda;
-    private final boolean buttonsEnabled;
+    private final boolean confirmButtonEnabled;
+    private final boolean askButtonEnabled;
 
     public JdaDigestSender(@Lazy JDA jda,
-                           @Value("${discord.digest-buttons-enabled:false}") boolean buttonsEnabled) {
+                           @Value("${discord.confirm-button-enabled:false}") boolean confirmButtonEnabled,
+                           @Value("${discord.ask-button-enabled:false}") boolean askButtonEnabled) {
         this.jda = jda;
-        this.buttonsEnabled = buttonsEnabled;
+        this.confirmButtonEnabled = confirmButtonEnabled;
+        this.askButtonEnabled = askButtonEnabled;
     }
 
     public static String confirmButtonId(Long itemId) {
@@ -63,7 +66,7 @@ public class JdaDigestSender implements DigestSender {
         List<Long> sentMessageIds = new ArrayList<>();
         for (DigestMessage message : messages) {
             try {
-                Message sent = channel.sendMessage(toMessageData(message, buttonsEnabled)).complete();
+                Message sent = channel.sendMessage(toMessageData(message, confirmButtonEnabled, askButtonEnabled)).complete();
                 sentMessageIds.add(sent.getIdLong());
             } catch (InsufficientPermissionException e) {
                 throw new DigestSendException(
@@ -99,20 +102,26 @@ public class JdaDigestSender implements DigestSender {
     }
 
     /**
-     * @param buttonsEnabled false면 항목 텍스트만 보내고 확인/질문 버튼(ActionRow)은 붙이지 않는다
+     * 항목마다 켜진 버튼만 ActionRow에 넣는다. 둘 다 꺼져 있으면 ActionRow 없이 항목 텍스트만 보낸다.
      */
-    static MessageCreateData toMessageData(DigestMessage message, boolean buttonsEnabled) {
+    static MessageCreateData toMessageData(DigestMessage message, boolean confirmButtonEnabled, boolean askButtonEnabled) {
         List<MessageTopLevelComponent> components = new ArrayList<>();
         for (DigestBlock block : message.blocks()) {
             if (!components.isEmpty()) {
                 components.add(Separator.createDivider(Separator.Spacing.SMALL));
             }
             components.add(TextDisplay.of(block.text()));
-            if (buttonsEnabled && block.hasButtons()) {
-                components.add(ActionRow.of(
-                        Button.success(confirmButtonId(block.itemId()), CONFIRM_LABEL),
-                        Button.secondary(askButtonId(block.itemId()), ASK_LABEL)
-                ));
+            if (block.hasButtons()) {
+                List<Button> buttons = new ArrayList<>();
+                if (confirmButtonEnabled) {
+                    buttons.add(Button.success(confirmButtonId(block.itemId()), CONFIRM_LABEL));
+                }
+                if (askButtonEnabled) {
+                    buttons.add(Button.secondary(askButtonId(block.itemId()), ASK_LABEL));
+                }
+                if (!buttons.isEmpty()) {
+                    components.add(ActionRow.of(buttons));
+                }
             }
         }
 

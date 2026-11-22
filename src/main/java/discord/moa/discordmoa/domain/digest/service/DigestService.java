@@ -5,6 +5,7 @@ import discord.moa.discordmoa.domain.digest.entity.CycleKind;
 import discord.moa.discordmoa.domain.digest.entity.Digest;
 import discord.moa.discordmoa.domain.digest.entity.DigestStatus;
 import discord.moa.discordmoa.domain.digest.entity.DigestType;
+import discord.moa.discordmoa.domain.digest.repository.DigestItemRepository;
 import discord.moa.discordmoa.domain.digest.repository.DigestRepository;
 import discord.moa.discordmoa.domain.digest.sender.DigestBlock;
 import discord.moa.discordmoa.domain.digest.sender.DigestMessage;
@@ -50,6 +51,7 @@ public class DigestService {
     private final DigestMessagePlanner planner;
     private final DigestSender digestSender;
     private final DigestRepository digestRepository;
+    private final DigestItemRepository digestItemRepository;
     private final TeamRepository teamRepository;
     private final TrackedRepoRepository trackedRepoRepository;
     private final TeamLocks teamLocks;
@@ -60,7 +62,8 @@ public class DigestService {
     private final Clock clock;
 
     public DigestService(DigestWriter digestWriter, DigestPreparer digestPreparer, DigestMessagePlanner planner,
-                         DigestSender digestSender, DigestRepository digestRepository, TeamRepository teamRepository,
+                         DigestSender digestSender, DigestRepository digestRepository,
+                         DigestItemRepository digestItemRepository, TeamRepository teamRepository,
                          TrackedRepoRepository trackedRepoRepository, TeamLocks teamLocks, OpsNotifier opsNotifier, CycleCalendar calendar,
                          ScheduleProperties scheduleProperties,
                          @Qualifier(SchedulingConfig.SEND_EXECUTOR) ExecutorService sendExecutor,
@@ -70,6 +73,7 @@ public class DigestService {
         this.planner = planner;
         this.digestSender = digestSender;
         this.digestRepository = digestRepository;
+        this.digestItemRepository = digestItemRepository;
         this.teamRepository = teamRepository;
         this.trackedRepoRepository = trackedRepoRepository;
         this.teamLocks = teamLocks;
@@ -231,7 +235,9 @@ public class DigestService {
     private CycleStatus.Result last(Long teamId, CycleKind kind, Instant now) {
         return digestRepository
                 .findFirstByTeamIdAndCycleKindAndScheduledForLessThanEqualOrderByScheduledForDesc(teamId, kind, now)
-                .map(CycleStatus.Result::of)
+                .map(digest -> CycleStatus.Result.of(digest,
+                        digestItemRepository.countByDigestIdAndDiscordMessageIdIsNotNull(digest.getId()),
+                        digestItemRepository.countByDigestIdAndDiscordMessageIdIsNotNullAndConfirmedAtIsNotNull(digest.getId())))
                 .orElse(null);
     }
 

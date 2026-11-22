@@ -34,6 +34,7 @@ import discord.moa.discordmoa.domain.team.service.TeamLocks;
 import discord.moa.discordmoa.support.TeamLockHolder;
 import discord.moa.discordmoa.global.config.ScheduleProperties;
 import discord.moa.discordmoa.support.DirectExecutorService;
+import discord.moa.discordmoa.support.H2Constraints;
 import discord.moa.discordmoa.support.MutableClock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -126,7 +127,7 @@ class DigestCycleTest {
 
     @BeforeEach
     void setUp() {
-        dropH2CheckConstraints();
+        H2Constraints.dropChecks(entityManagerFactory);
         team = teamRepository.save(new Team("1팀", CHANNEL_ID, PM_ID));
         backend = trackedRepoRepository.save(new TrackedRepo(team, 1L, "team1/backend", "main", null, 555L));
         frontend = trackedRepoRepository.save(new TrackedRepo(team, 2L, "team1/frontend", "main", null, 555L));
@@ -768,29 +769,25 @@ class DigestCycleTest {
         assertThat(status.lastManual()).isNull();
     }
 
-    // ---- helpers ----
+    @Test
+    void 회차상태는_직전_정기_회차의_PM_확인_현황을_보여준다() {
+        collected(backend, "로그인 API 추가");
+        givenSummaryLlm(new SummaryStatus[]{SummaryStatus.READY, SummaryStatus.PARTIAL, SummaryStatus.INTERNAL}, "기능");
+        preparer.prepareCycle(CYCLE);
+        clock.set(CYCLE);
+        service.sendScheduled(team, CYCLE);
+        List<DigestItem> sent = items(cycleDigest(CYCLE));
+        digestItemRepository.confirm(sent.get(0).getId(), PM_ID, kst(9, 5));
+        digestItemRepository.confirm(sent.get(2).getId(), PM_ID, kst(9, 6));
 
-    /**
-     * 이 환경의 H2(2.4.240)는 Hibernate가 enum 컬럼에 붙이는 check(col in (...)) 제약을 올바른 값에도
-     * "Check constraint invalid"로 거절한다. 운영 DB(MySQL)와 무관한 문제라 테스트 DB에서만 check 제약을 지운다.
-     */
-    private void dropH2CheckConstraints() {
-        entityManagerFactory.createEntityManager().unwrap(org.hibernate.Session.class).doWork(connection -> {
-            List<String> names = new ArrayList<>();
-            try (var statement = connection.createStatement();
-                 var rows = statement.executeQuery("select TABLE_NAME, CONSTRAINT_NAME from INFORMATION_SCHEMA.TABLE_CONSTRAINTS "
-                         + "where TABLE_SCHEMA = 'PUBLIC' and CONSTRAINT_TYPE = 'CHECK'")) {
-                while (rows.next()) {
-                    names.add("alter table " + rows.getString(1) + " drop constraint " + rows.getString(2));
-                }
-            }
-            for (String drop : names) {
-                try (var statement = connection.createStatement()) {
-                    statement.execute(drop);
-                }
-            }
-        });
+        clock.set(kst(10, 0));
+        CycleStatus.Result last = service.cycleStatusByChannel(CHANNEL_ID).lastScheduled();
+
+        assertThat(last.deliveredItems()).isEqualTo(3);
+        assertThat(last.confirmedItems()).isEqualTo(2);
     }
+
+    // ---- helpers ----
 
     private void build(Duration sendLockWait, ExecutorService prepareExecutor) {
         properties = new ScheduleProperties(SEOUL, "0 30 8,20 * * *", "0 0 9,21 * * *",
@@ -799,7 +796,7 @@ class DigestCycleTest {
         preparer = new DigestPreparer(changeCollector, changeSummarizer, digestWriter, teamRepository, teamLocks,
                 opsNotifier, calendar, prepareExecutor, clock);
         service = new DigestService(digestWriter, preparer, new DigestMessagePlanner(), digestSender, digestRepository,
-                teamRepository, trackedRepoRepository, teamLocks, opsNotifier, calendar, properties,
+                digestItemRepository, teamRepository, trackedRepoRepository, teamLocks, opsNotifier, calendar, properties,
                 new DirectExecutorService(), clock);
         recovery = new DigestRecovery(digestRepository, digestWriter, service, teamRepository, opsNotifier, calendar,
                 properties, clock);

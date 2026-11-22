@@ -16,7 +16,8 @@ class CycleStatusMessageTest {
         CycleStatus status = new CycleStatus("1팀",
                 Instant.parse("2026-11-27T12:00:00Z"), Instant.parse("2026-11-27T11:58:00Z"), DigestStatus.PREPARING,
                 new CycleStatus.Result(Instant.parse("2026-11-27T00:00:00Z"), DigestStatus.FAILED, DigestType.FALLBACK,
-                        null, "봇에게 #1팀 채널의 Send Messages 권한이 없어요.", "준비 마감까지 요약이 끝나지 않아 변경 목록으로 보내요"),
+                        null, "봇에게 #1팀 채널의 Send Messages 권한이 없어요.", "준비 마감까지 요약이 끝나지 않아 변경 목록으로 보내요",
+                        0, 0),
                 null);
 
         assertThat(CycleStatusMessage.format(status))
@@ -26,7 +27,18 @@ class CycleStatusMessageTest {
                 .contains("결과: FAILED · 유형 FALLBACK (변경 목록)")
                 .contains("실패 원인: 봇에게 #1팀 채널의 Send Messages 권한이 없어요.")
                 .contains("요약 대신 변경 목록을 쓴 이유: 준비 마감까지")
-                .doesNotContain("/발송테스트");
+                .doesNotContain("/발송테스트", "PM 확인");   // 전달된 항목이 없으면 확인 현황을 보여주지 않는다
+    }
+
+    @Test
+    void 직전_회차의_PM_확인_현황을_보여준다() {
+        CycleStatus status = new CycleStatus("1팀", Instant.parse("2026-11-27T12:00:00Z"),
+                Instant.parse("2026-11-27T11:58:00Z"), null,
+                new CycleStatus.Result(Instant.parse("2026-11-27T00:00:00Z"), DigestStatus.SENT, DigestType.LLM,
+                        Instant.parse("2026-11-27T00:00:01Z"), null, null, 3, 2),
+                null);
+
+        assertThat(CycleStatusMessage.format(status)).contains("- PM 확인 2/3");
     }
 
     @Test
