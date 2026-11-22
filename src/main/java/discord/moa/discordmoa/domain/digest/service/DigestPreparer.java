@@ -79,7 +79,7 @@ public class DigestPreparer {
         }
 
         Map<Team, Future<?>> tasks = new LinkedHashMap<>();
-        for (Team team : teamRepository.findAll()) {
+        for (Team team : teamRepository.findAllWithTrackedRepo()) {
             tasks.put(team, prepareExecutor.submit(() -> prepareScheduledTeam(team, cycle)));
         }
         log.info("회차 준비 시작: 회차={}, 팀 {}개, 마감={}", cycle, tasks.size(), deadline);

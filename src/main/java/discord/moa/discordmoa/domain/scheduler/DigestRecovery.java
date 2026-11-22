@@ -79,7 +79,7 @@ public class DigestRecovery {
 
         // 2) 준비·발송 시각 내내 서버가 꺼져 있어 회차 기록조차 없는 경우
         calendar.latestSendAtOrBefore(now, window).ifPresent(cycle -> {
-            for (Team team : teamRepository.findAll()) {
+            for (Team team : teamRepository.findAllWithTrackedRepo()) {
                 if (handled.contains(key(team.getId(), cycle))
                         || digestRepository.findByTeamIdAndScheduledFor(team.getId(), cycle).isPresent()) {
                     continue;

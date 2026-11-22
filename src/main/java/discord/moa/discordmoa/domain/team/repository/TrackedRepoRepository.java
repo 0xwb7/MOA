@@ -15,6 +15,8 @@ public interface TrackedRepoRepository extends JpaRepository<TrackedRepo, Long> 
 
     boolean existsByGithubRepoId(Long githubRepoId);
 
+    boolean existsByTeamId(Long teamId);
+
     @EntityGraph(attributePaths = "team")
     Optional<TrackedRepo> findByGithubRepoId(Long githubRepoId);
 

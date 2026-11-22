@@ -512,6 +512,75 @@ class DigestCycleTest {
         verify(digestSender, never()).send(anyLong(), anyList());
     }
 
+    // ---- 레포가 없는 팀 ----
+
+    @Test
+    void 레포가_없는_팀은_준비와_발송_대상에서_빠진다() {
+        Team empty = teamRepository.save(new Team("빈팀", 300L, 9L));
+        collected(backend, "로그인 API 추가");
+
+        preparer.prepareCycle(CYCLE);
+        clock.set(CYCLE);
+        service.sendCycle(CYCLE);
+
+        assertThat(digestRepository.findByTeamIdAndScheduledFor(empty.getId(), CYCLE)).isEmpty();
+        verify(digestSender, never()).send(eq(300L), anyList());
+        // 레포가 있는 팀은 기존과 같다
+        assertThat(cycleDigest(CYCLE).getStatus()).isEqualTo(DigestStatus.SENT);
+        verify(digestSender, times(1)).send(eq(CHANNEL_ID), anyList());
+        verify(opsNotifier, never()).notify(any());
+    }
+
+    @Test
+    void 레포가_없는_팀은_재시작_복구에서도_회차를_만들지_않는다() {
+        Team empty = teamRepository.save(new Team("빈팀", 300L, 9L));
+
+        clock.set(kst(9, 25));   // 준비·발송 시각 내내 서버가 꺼져 있었던 상황
+        recovery.recover();
+
+        assertThat(digestRepository.findByTeamIdAndScheduledFor(empty.getId(), CYCLE)).isEmpty();
+        verify(digestSender, never()).send(eq(300L), anyList());
+        assertThat(cycleDigest(CYCLE).getStatus()).isEqualTo(DigestStatus.SENT);
+    }
+
+    @Test
+    void 준비_후에_첫_레포를_등록한_팀은_발송_시점에_즉석으로_만들어_보낸다() {
+        Team newcomer = teamRepository.save(new Team("새팀", 300L, 9L));
+        preparer.prepareCycle(CYCLE);
+        assertThat(digestRepository.findByTeamIdAndScheduledFor(newcomer.getId(), CYCLE)).isEmpty();
+
+        clock.set(kst(8, 40));
+        trackedRepoRepository.save(new TrackedRepo(newcomer, 30L, "team3/app", "main", "head-at-register", 557L));
+
+        clock.set(CYCLE);
+        service.sendCycle(CYCLE);
+
+        Digest digest = digestRepository.findByTeamIdAndScheduledFor(newcomer.getId(), CYCLE).orElseThrow();
+        assertThat(digest.getStatus()).isEqualTo(DigestStatus.SENT);
+        // 등록 시점의 최신 커밋부터 수집하므로, 그사이 수집이 없었다면 변경 없음 안내가 간다 (멘션 없음)
+        assertThat(digest.getType()).isEqualTo(DigestType.NO_CHANGE);
+        assertThat(digest.getMentionUserId()).isNull();
+        verify(digestSender).send(eq(300L), anyList());
+        verify(changeSummarizer, never()).summarize(eq(newcomer.getId()), any());
+        assertThat(opsEvents()).singleElement().satisfies(event -> {
+            assertThat(event.type()).isEqualTo(OpsEvent.Type.SEND_INLINE_FALLBACK);
+            assertThat(event.teamName()).isEqualTo("새팀");
+            assertThat(event.detail()).contains(DigestService.INLINE_NO_DIGEST_REASON);
+        });
+    }
+
+    @Test
+    void 레포가_없는_팀에서_발송테스트를_하면_레포_등록을_안내한다() {
+        Team empty = teamRepository.save(new Team("빈팀", 300L, 9L));
+
+        assertThatThrownBy(() -> service.sendNowByChannel(300L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("등록된 레포가 없어요. /레포등록 으로 먼저 등록해 주세요.");
+
+        verify(changeCollector, never()).collectTeam(anyLong());
+        assertThat(digestRepository.findAll()).noneMatch(d -> d.getTeam().getId().equals(empty.getId()));
+    }
+
     // ---- 팀 락 ----
 
     @Test
@@ -648,7 +717,8 @@ class DigestCycleTest {
         preparer = new DigestPreparer(changeCollector, changeSummarizer, digestWriter, teamRepository, teamLocks,
                 opsNotifier, calendar, prepareExecutor, clock);
         service = new DigestService(digestWriter, preparer, new DigestMessagePlanner(), digestSender, digestRepository,
-                teamRepository, teamLocks, opsNotifier, calendar, properties, new DirectExecutorService(), clock);
+                teamRepository, trackedRepoRepository, teamLocks, opsNotifier, calendar, properties,
+                new DirectExecutorService(), clock);
         recovery = new DigestRecovery(digestRepository, digestWriter, service, teamRepository, opsNotifier, calendar,
                 properties, clock);
     }

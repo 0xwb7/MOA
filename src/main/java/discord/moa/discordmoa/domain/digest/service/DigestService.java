@@ -15,6 +15,7 @@ import discord.moa.discordmoa.domain.ops.OpsNotifier;
 import discord.moa.discordmoa.domain.scheduler.CycleCalendar;
 import discord.moa.discordmoa.domain.team.entity.Team;
 import discord.moa.discordmoa.domain.team.repository.TeamRepository;
+import discord.moa.discordmoa.domain.team.repository.TrackedRepoRepository;
 import discord.moa.discordmoa.domain.team.service.TeamLocks;
 import discord.moa.discordmoa.global.config.ScheduleProperties;
 import discord.moa.discordmoa.global.config.SchedulingConfig;
@@ -42,6 +43,7 @@ public class DigestService {
 
     static final String INLINE_NO_DIGEST_REASON = "준비된 회차가 없어 발송 시점에 변경 목록으로 만들었어요";
     static final String INLINE_PREPARING_REASON = "준비가 끝나지 않아 발송 시점에 변경 목록으로 만들었어요";
+    static final String NO_REPO_MESSAGE = "등록된 레포가 없어요. /레포등록 으로 먼저 등록해 주세요.";
 
     private final DigestWriter digestWriter;
     private final DigestPreparer digestPreparer;
@@ -49,6 +51,7 @@ public class DigestService {
     private final DigestSender digestSender;
     private final DigestRepository digestRepository;
     private final TeamRepository teamRepository;
+    private final TrackedRepoRepository trackedRepoRepository;
     private final TeamLocks teamLocks;
     private final OpsNotifier opsNotifier;
     private final CycleCalendar calendar;
@@ -58,7 +61,7 @@ public class DigestService {
 
     public DigestService(DigestWriter digestWriter, DigestPreparer digestPreparer, DigestMessagePlanner planner,
                          DigestSender digestSender, DigestRepository digestRepository, TeamRepository teamRepository,
-                         TeamLocks teamLocks, OpsNotifier opsNotifier, CycleCalendar calendar,
+                         TrackedRepoRepository trackedRepoRepository, TeamLocks teamLocks, OpsNotifier opsNotifier, CycleCalendar calendar,
                          ScheduleProperties scheduleProperties,
                          @Qualifier(SchedulingConfig.SEND_EXECUTOR) ExecutorService sendExecutor,
                          Clock clock) {
@@ -68,6 +71,7 @@ public class DigestService {
         this.digestSender = digestSender;
         this.digestRepository = digestRepository;
         this.teamRepository = teamRepository;
+        this.trackedRepoRepository = trackedRepoRepository;
         this.teamLocks = teamLocks;
         this.opsNotifier = opsNotifier;
         this.calendar = calendar;
@@ -80,7 +84,7 @@ public class DigestService {
      * 발송 단계: 모든 팀을 발송 실행기에서 병렬로 보낸다 (한 팀이 락을 기다려도 다른 팀이 밀리지 않게).
      */
     public void sendCycle(Instant cycle) {
-        List<Team> teams = teamRepository.findAll();
+        List<Team> teams = teamRepository.findAllWithTrackedRepo();
         log.info("회차 발송 시작: 회차={}, 팀 {}개", cycle, teams.size());
         for (Team team : teams) {
             sendExecutor.execute(() -> {
@@ -142,6 +146,9 @@ public class DigestService {
      */
     public ManualSendResult sendNowByChannel(Long channelId) {
         Team team = teamByChannel(channelId);
+        if (!trackedRepoRepository.existsByTeamId(team.getId())) {
+            throw new IllegalStateException(NO_REPO_MESSAGE);
+        }
         return teamLocks.callIfFree(team.getId(), team.getName(), () -> {
             Instant cycle = clock.instant().truncatedTo(ChronoUnit.MILLIS);
             Preparation preparation = digestPreparer.prepareTeam(team.getId(), cycle, CycleKind.MANUAL)
