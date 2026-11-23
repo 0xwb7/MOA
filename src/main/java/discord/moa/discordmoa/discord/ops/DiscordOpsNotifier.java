@@ -1,14 +1,13 @@
 package discord.moa.discordmoa.discord.ops;
 
+import discord.moa.discordmoa.discord.sender.ChannelPermissions;
 import discord.moa.discordmoa.domain.ops.LoggingOpsNotifier;
 import discord.moa.discordmoa.domain.ops.OpsEvent;
 import discord.moa.discordmoa.domain.ops.OpsNotifier;
 import lombok.extern.slf4j.Slf4j;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.Permission;
-import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Role;
-import net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildMessageChannel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -17,7 +16,6 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-import java.util.EnumSet;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -119,12 +117,8 @@ public class DiscordOpsNotifier implements OpsNotifier {
         if (channel == null) {
             return Target.unavailable(new OpsTestResult(OpsTestResult.Status.CHANNEL_NOT_FOUND, "channelId=" + channelId));
         }
-        Permission send = channel instanceof ThreadChannel ? Permission.MESSAGE_SEND_IN_THREADS : Permission.MESSAGE_SEND;
-        Member self = channel.getGuild().getSelfMember();
-        List<String> missing = EnumSet.of(Permission.VIEW_CHANNEL, send).stream()
-                .filter(permission -> !self.hasPermission(channel, permission))
-                .map(Permission::getName)
-                .toList();
+        // 팀 채널 발송과 같은 기준 (채널 보기 + 메시지 보내기)
+        List<String> missing = ChannelPermissions.missing(channel).stream().map(Permission::getName).toList();
         if (!missing.isEmpty()) {
             return Target.unavailable(new OpsTestResult(OpsTestResult.Status.NO_PERMISSION,
                     "#" + channel.getName() + " 채널의 " + String.join(", ", missing)));
