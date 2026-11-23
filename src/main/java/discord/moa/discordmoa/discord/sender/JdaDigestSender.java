@@ -11,9 +11,7 @@ import net.dv8tion.jda.api.components.actionrow.ActionRow;
 import net.dv8tion.jda.api.components.buttons.Button;
 import net.dv8tion.jda.api.components.separator.Separator;
 import net.dv8tion.jda.api.components.textdisplay.TextDisplay;
-import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Message;
-import net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel;
 import net.dv8tion.jda.api.entities.channel.middleman.GuildMessageChannel;
 import net.dv8tion.jda.api.exceptions.ErrorResponseException;
 import net.dv8tion.jda.api.exceptions.InsufficientPermissionException;
@@ -87,17 +85,9 @@ public class JdaDigestSender implements DigestSender {
     }
 
     private void checkPermissions(GuildMessageChannel channel) {
-        Permission send = channel instanceof ThreadChannel ? Permission.MESSAGE_SEND_IN_THREADS : Permission.MESSAGE_SEND;
-        Member self = channel.getGuild().getSelfMember();
-
-        List<String> missing = EnumSet.of(Permission.VIEW_CHANNEL, send).stream()
-                .filter(permission -> !self.hasPermission(channel, permission))
-                .map(Permission::getName)
-                .toList();
+        List<Permission> missing = ChannelPermissions.missing(channel);
         if (!missing.isEmpty()) {
-            throw new DigestSendException(
-                    "봇에게 #" + channel.getName() + " 채널의 " + String.join(", ", missing) + " 권한이 없어요.",
-                    List.of());
+            throw new DigestSendException(ChannelPermissions.describeMissing(channel, missing), List.of());
         }
     }
 

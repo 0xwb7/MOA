@@ -1,6 +1,7 @@
 package discord.moa.discordmoa.discord.listener;
 
 import discord.moa.discordmoa.discord.ops.DiscordOpsNotifier;
+import discord.moa.discordmoa.discord.sender.ChannelPermissions;
 import discord.moa.discordmoa.domain.account.service.AccountLinkService;
 import discord.moa.discordmoa.domain.collect.service.ChangeCollector;
 import discord.moa.discordmoa.domain.collect.service.RepoCollectResult;
@@ -15,10 +16,13 @@ import discord.moa.discordmoa.domain.summary.service.SummaryPreview;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.domain.team.service.RepoDeactivation;
 import discord.moa.discordmoa.domain.team.service.RepoRegistration;
+import discord.moa.discordmoa.domain.team.service.TeamRegistration;
 import discord.moa.discordmoa.domain.team.service.TeamService;
 import discord.moa.discordmoa.domain.team.service.TrackedRepoService;
 import discord.moa.discordmoa.global.config.DiscordTaskConfig;
 import lombok.extern.slf4j.Slf4j;
+import net.dv8tion.jda.api.Permission;
+import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.events.interaction.command.CommandAutoCompleteInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
@@ -109,14 +113,43 @@ public class SlashCommandListener extends ListenerAdapter {
         long pmId = event.getOption("pm").getAsUser().getIdLong();
 
         try {
-            teamService.register(name, channelId, pmId);
-            event.reply("✅ '" + name + "' 등록이 완료됐어요.").setEphemeral(true).queue();
+            // 옵션의 채널 객체에는 채널별 권한 설정이 빠져 있을 수 있어서, 발송 때처럼 봇의 서버 캐시에서 다시 찾는다
+            TextChannel channel = event.getGuild() == null ? null : event.getGuild().getTextChannelById(channelId);
+            if (channel == null) {
+                event.reply("⚠️ 봇이 이 채널을 찾을 수 없어요. 이 서버의 텍스트 채널인지 확인해 주세요.")
+                        .setEphemeral(true).queue();
+                return;
+            }
+            List<Permission> missing = ChannelPermissions.missing(channel);
+            if (!missing.isEmpty()) {
+                event.reply("⚠️ " + ChannelPermissions.describeMissing(channel, missing)
+                                + "\n채널 설정 → 권한에서 MOA 봇(또는 봇 역할)에 이 권한을 준 뒤 다시 /팀등록 해 주세요.")
+                        .setEphemeral(true).queue();
+                return;
+            }
+            TeamRegistration registration = teamService.register(name, channelId, pmId);
+            event.reply(describeTeamRegistration(registration)).setEphemeral(true)
+                    .setAllowedMentions(List.of()).queue();
         } catch (IllegalStateException e) {
             event.reply("⚠️ " + e.getMessage()).setEphemeral(true).queue();
         } catch (RuntimeException e) {
             log.error("팀 등록 중 오류: name={}, channelId={}", name, channelId, e);
             event.reply(UNEXPECTED_ERROR).setEphemeral(true).queue();
         }
+    }
+
+    static String describeTeamRegistration(TeamRegistration registration) {
+        if (registration.created()) {
+            return "✅ '" + registration.teamName() + "' 등록이 완료됐어요.";
+        }
+        String pm = registration.pmUserId().equals(registration.previousPmUserId())
+                ? "<@" + registration.pmUserId() + "> 그대로"
+                : "<@" + registration.previousPmUserId() + "> → <@" + registration.pmUserId() + ">";
+        String text = "✅ '" + registration.teamName() + "' 정보가 수정됐어요 (PM: " + pm + ")";
+        if (!registration.channelId().equals(registration.previousChannelId())) {
+            text += "\n채널: <#" + registration.previousChannelId() + "> → <#" + registration.channelId() + ">";
+        }
+        return text;
     }
 
     private void handleRepoRegister(SlashCommandInteractionEvent event) {

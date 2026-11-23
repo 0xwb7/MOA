@@ -2,6 +2,7 @@ package discord.moa.discordmoa.discord.command;
 
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.entities.channel.ChannelType;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions;
 import net.dv8tion.jda.api.interactions.commands.OptionType;
@@ -24,7 +25,8 @@ public class CommandRegistrar {
 
                         Commands.slash("팀등록", "팀을 등록하거나 수정해요 (운영진 전용)")
                                 .addOption(OptionType.STRING, "name", "팀 이름", true)
-                                .addOption(OptionType.CHANNEL, "channel", "팀 채팅방", true)
+                                .addOptions(new OptionData(OptionType.CHANNEL, "channel", "팀 채팅방 (텍스트 채널)", true)
+                                        .setChannelTypes(ChannelType.TEXT))
                                 .addOption(OptionType.USER, "pm", "팀 PM", true)
                                 .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER)),
 
