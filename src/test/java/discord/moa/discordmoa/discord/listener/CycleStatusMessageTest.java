@@ -18,7 +18,7 @@ class CycleStatusMessageTest {
                 new CycleStatus.Result(Instant.parse("2026-11-27T00:00:00Z"), DigestStatus.FAILED, DigestType.FALLBACK,
                         null, "봇에게 #1팀 채널의 Send Messages 권한이 없어요.", "준비 마감까지 요약이 끝나지 않아 변경 목록으로 보내요",
                         0, 0),
-                null);
+                null, true);
 
         assertThat(CycleStatusMessage.format(status))
                 .contains("**다음 정기 회차** 11/27 21:00 (준비 마감 11/27 20:58)")
@@ -36,7 +36,7 @@ class CycleStatusMessageTest {
                 Instant.parse("2026-11-27T11:58:00Z"), null,
                 new CycleStatus.Result(Instant.parse("2026-11-27T00:00:00Z"), DigestStatus.SENT, DigestType.LLM,
                         Instant.parse("2026-11-27T00:00:01Z"), null, null, 3, 2),
-                null);
+                null, true);
 
         assertThat(CycleStatusMessage.format(status)).contains("- PM 확인 2/3");
     }
@@ -44,8 +44,17 @@ class CycleStatusMessageTest {
     @Test
     void 기록이_없으면_없음으로_보여준다() {
         CycleStatus status = new CycleStatus("1팀", Instant.parse("2026-11-27T12:00:00Z"),
-                Instant.parse("2026-11-27T11:58:00Z"), null, null, null);
+                Instant.parse("2026-11-27T11:58:00Z"), null, null, null, true);
 
-        assertThat(CycleStatusMessage.format(status)).contains("상태: 없음 (아직 준비 전)", "- 기록 없음");
+        assertThat(CycleStatusMessage.format(status)).contains("상태: 없음 (아직 준비 전)", "- 기록 없음")
+                .doesNotContain("활성 레포가 없어");
+    }
+
+    @Test
+    void 활성_레포가_없으면_정기_회차_대상이_아니라고_알려준다() {
+        CycleStatus status = new CycleStatus("1팀", Instant.parse("2026-11-27T12:00:00Z"),
+                Instant.parse("2026-11-27T11:58:00Z"), null, null, null, false);
+
+        assertThat(CycleStatusMessage.format(status)).contains("⚠️ 활성 레포가 없어 정기 회차 대상이 아니에요");
     }
 }

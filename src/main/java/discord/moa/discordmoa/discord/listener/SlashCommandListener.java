@@ -13,17 +13,21 @@ import discord.moa.discordmoa.domain.digest.service.ManualSendResult;
 import discord.moa.discordmoa.domain.summary.service.ChangeSummarizer;
 import discord.moa.discordmoa.domain.summary.service.SummaryPreview;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
+import discord.moa.discordmoa.domain.team.service.RepoDeactivation;
 import discord.moa.discordmoa.domain.team.service.RepoRegistration;
 import discord.moa.discordmoa.domain.team.service.TeamService;
 import discord.moa.discordmoa.domain.team.service.TrackedRepoService;
 import discord.moa.discordmoa.global.config.DiscordTaskConfig;
 import lombok.extern.slf4j.Slf4j;
+import net.dv8tion.jda.api.events.interaction.command.CommandAutoCompleteInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import net.dv8tion.jda.api.interactions.commands.Command;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 
@@ -66,6 +70,8 @@ public class SlashCommandListener extends ListenerAdapter {
             case "연동" -> handleLink(event);
             case "팀등록" -> handleTeamRegister(event);
             case "레포등록" -> handleRepoRegister(event);
+            case "레포해제" -> handleRepoUnregister(event);
+            case "레포목록" -> handleRepoList(event);
             case "수집테스트" -> handleCollectTest(event);
             case "발송테스트" -> handleSendTest(event);
             case "요약미리보기" -> handleSummaryPreview(event);
@@ -121,17 +127,7 @@ public class SlashCommandListener extends ListenerAdapter {
         runLong(event, () -> {
             try {
                 RepoRegistration registration = trackedRepoService.register(channelId, url);
-                TrackedRepo repo = registration.repo();
-                if (registration.refreshed()) {
-                    event.getHook().sendMessage("✅ " + repo.getFullName()
-                            + " 설치 정보를 갱신했어요. 이전 수집 위치부터 이어서 수집해요.").queue();
-                    return;
-                }
-                String baseline = repo.getLastProcessedSha() == null
-                        ? "아직 커밋이 없는 레포라서 첫 커밋부터 수집할게요."
-                        : "지금 이후의 변경부터 수집할게요.";
-                event.getHook().sendMessage("✅ " + repo.getFullName() + " 레포가 등록됐어요. ("
-                        + repo.getDefaultBranch() + " 브랜치) " + baseline).queue();
+                event.getHook().sendMessage(describeRegistration(registration)).queue();
             } catch (IllegalArgumentException | IllegalStateException e) {
                 event.getHook().sendMessage("⚠️ " + e.getMessage()).queue();
             } catch (RestClientException e) {
@@ -142,6 +138,70 @@ public class SlashCommandListener extends ListenerAdapter {
                 event.getHook().sendMessage(UNEXPECTED_ERROR).queue();
             }
         });
+    }
+
+    static String describeRegistration(RepoRegistration registration) {
+        TrackedRepo repo = registration.repo();
+        String branch = " (" + repo.getDefaultBranch() + " 브랜치) ";
+        String baseline = repo.getLastProcessedSha() == null
+                ? "아직 커밋이 없는 레포라서 첫 커밋부터 수집할게요."
+                : "지금 이후의 변경부터 수집할게요.";
+        return switch (registration.kind()) {
+            case REFRESHED -> "✅ " + repo.getFullName() + " 설치 정보를 갱신했어요. 이전 수집 위치부터 이어서 수집해요.";
+            case NEW -> "✅ " + repo.getFullName() + " 레포가 등록됐어요." + branch + baseline;
+            case REACTIVATED -> "✅ " + repo.getFullName() + " 레포를 다시 등록했어요." + branch
+                    + "해제돼 있던 동안의 변경은 건너뛰고 " + baseline;
+            case MOVED -> "✅ " + repo.getFullName() + " 레포를 '" + registration.previousTeamName()
+                    + "' 팀에서 이 팀으로 옮겨 등록했어요." + branch + baseline;
+        };
+    }
+
+    private void handleRepoUnregister(SlashCommandInteractionEvent event) {
+        String input = event.getOption("repo").getAsString();
+        long channelId = event.getChannel().getIdLong();
+        try {
+            RepoDeactivation result = trackedRepoService.deactivate(channelId, input,
+                    event.getUser().getIdLong(), event.getUser().getName());
+            event.reply("✅ " + result.fullName() + " 레포 등록을 해제했어요. 이제 이 레포의 변경은 수집하지 않아요.\n"
+                            + "이미 수집된 변경은 다음 발송에 포함돼요. 다시 수집하려면 /레포등록 을 실행해 주세요.")
+                    .setEphemeral(true).queue();
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            event.reply("⚠️ " + e.getMessage()).setEphemeral(true).queue();
+        } catch (RuntimeException e) {
+            log.error("레포 해제 중 오류: input={}, channelId={}", input, channelId, e);
+            event.reply(UNEXPECTED_ERROR).setEphemeral(true).queue();
+        }
+    }
+
+    private void handleRepoList(SlashCommandInteractionEvent event) {
+        long channelId = event.getChannel().getIdLong();
+        try {
+            event.reply(RepoListMessage.format(trackedRepoService.listActive(channelId))).setEphemeral(true).queue();
+        } catch (IllegalStateException e) {
+            event.reply("⚠️ " + e.getMessage()).setEphemeral(true).queue();
+        } catch (RuntimeException e) {
+            log.error("레포 목록 조회 중 오류: channelId={}", channelId, e);
+            event.reply(UNEXPECTED_ERROR).setEphemeral(true).queue();
+        }
+    }
+
+    /**
+     * /레포해제 repo 자동완성: 이 채널 팀의 활성 레포.
+     */
+    @Override
+    public void onCommandAutoCompleteInteraction(CommandAutoCompleteInteractionEvent event) {
+        if (!"레포해제".equals(event.getName()) || !"repo".equals(event.getFocusedOption().getName())) {
+            return;
+        }
+        List<Command.Choice> choices;
+        try {
+            choices = trackedRepoService.autocompleteCandidates(event.getChannelIdLong(), event.getFocusedOption().getValue())
+                    .stream().map(name -> new Command.Choice(name, name)).toList();
+        } catch (RuntimeException e) {
+            log.warn("레포 자동완성 후보 조회 실패: channelId={}", event.getChannelIdLong(), e);
+            choices = List.of();
+        }
+        event.replyChoices(choices).queue();
     }
 
     private void handleCollectTest(SlashCommandInteractionEvent event) {

@@ -40,6 +40,7 @@ public record OpsEvent(
         SEND_FAILED("발송 실패", Severity.FAILURE),
         RECOVERY_LATE_SEND("재시작 복구: 늦은 발송", Severity.WARNING),
         RECOVERY_ABANDONED("재시작 복구: 발송 포기", Severity.FAILURE),
+        REPO_DEACTIVATED("레포 해제", Severity.INFO),
         STARTED("MOA 시작", Severity.INFO),
         OPS_TEST("운영 알림 테스트", Severity.INFO);
 

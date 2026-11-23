@@ -111,11 +111,15 @@ public class ChangeCollector {
 
     public List<RepoCollectResult> collectTeam(Long teamId) {
         List<RepoCollectResult> results = new ArrayList<>();
-        for (TrackedRepo repo : trackedRepoRepository.findAllByTeamId(teamId)) {
+        // 해제된(비활성) 레포는 수집하지 않는다
+        for (TrackedRepo repo : trackedRepoRepository.findAllByTeamIdAndActiveTrueOrderByIdAsc(teamId)) {
             try {
-                results.add(collect(repo)
+                RepoCollectResult result = collect(repo)
                         .map(batch -> RepoCollectResult.collected(repo.getFullName(), batch))
-                        .orElseGet(() -> RepoCollectResult.noChange(repo.getFullName())));
+                        .orElseGet(() -> RepoCollectResult.noChange(repo.getFullName()));
+                // /레포목록의 "마지막 수집 시각": 변경이 없어도 GitHub 확인에 성공하면 갱신한다
+                trackedRepoRepository.markCollected(repo.getId(), Instant.now());
+                results.add(result);
             } catch (RuntimeException e) {
                 String reason = describeFailure(e);
                 if (reason.equals(UNKNOWN_FAILURE)) {

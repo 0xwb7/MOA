@@ -656,6 +656,38 @@ class DigestCycleTest {
     }
 
     @Test
+    void 마지막_레포를_해제한_팀은_다음_정기_회차에서_빠지고_남은_배치는_건드리지_않는다() {
+        ChangeBatch pending = collected(backend, "해제 전에 수집된 커밋");
+        trackedRepoRepository.deactivate(backend.getId(), clock.instant());
+        trackedRepoRepository.deactivate(frontend.getId(), clock.instant());
+
+        preparer.prepareCycle(CYCLE);
+        clock.set(CYCLE);
+        service.sendCycle(CYCLE);
+
+        assertThat(digestRepository.findByTeamIdAndScheduledFor(team.getId(), CYCLE)).isEmpty();
+        verify(digestSender, never()).send(anyLong(), anyList());
+        assertThat(batch(pending).getStatus()).isEqualTo(ChangeBatchStatus.COLLECTED);
+    }
+
+    @Test
+    void 준비_후에_마지막_레포를_해제해도_준비된_회차는_그대로_발송한다() {
+        ChangeBatch login = collected(backend, "로그인 API 추가");
+        preparer.prepareCycle(CYCLE);
+
+        clock.set(kst(8, 45));
+        trackedRepoRepository.deactivate(backend.getId(), clock.instant());
+        trackedRepoRepository.deactivate(frontend.getId(), clock.instant());
+
+        clock.set(CYCLE);
+        service.sendCycle(CYCLE);
+
+        assertThat(cycleDigest(CYCLE).getStatus()).isEqualTo(DigestStatus.SENT);
+        assertThat(batch(login).getStatus()).isEqualTo(ChangeBatchStatus.SENT);
+        verify(digestSender).send(eq(CHANNEL_ID), anyList());
+    }
+
+    @Test
     void 레포가_없는_팀은_재시작_복구에서도_회차를_만들지_않는다() {
         Team empty = teamRepository.save(new Team("빈팀", 300L, 9L));
 

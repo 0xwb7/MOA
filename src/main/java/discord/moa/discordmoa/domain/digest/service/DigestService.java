@@ -88,7 +88,8 @@ public class DigestService {
      * 발송 단계: 모든 팀을 발송 실행기에서 병렬로 보낸다 (한 팀이 락을 기다려도 다른 팀이 밀리지 않게).
      */
     public void sendCycle(Instant cycle) {
-        List<Team> teams = teamRepository.findAllWithTrackedRepo();
+        // 활성 레포가 있는 팀 + 이 회차가 이미 준비된 팀 (준비 뒤 마지막 레포를 해제해도 그 회차는 보낸다)
+        List<Team> teams = teamRepository.findAllForSendCycle(cycle);
         log.info("회차 발송 시작: 회차={}, 팀 {}개", cycle, teams.size());
         for (Team team : teams) {
             sendExecutor.execute(() -> {
@@ -150,7 +151,7 @@ public class DigestService {
      */
     public ManualSendResult sendNowByChannel(Long channelId) {
         Team team = teamByChannel(channelId);
-        if (!trackedRepoRepository.existsByTeamId(team.getId())) {
+        if (!trackedRepoRepository.existsByTeamIdAndActiveTrue(team.getId())) {
             throw new IllegalStateException(NO_REPO_MESSAGE);
         }
         return teamLocks.callIfFree(team.getId(), team.getName(), () -> {
@@ -172,7 +173,9 @@ public class DigestService {
                 .map(Digest::getStatus).orElse(null);
         CycleStatus.Result lastScheduled = last(team.getId(), CycleKind.SCHEDULED, now);
         CycleStatus.Result lastManual = last(team.getId(), CycleKind.MANUAL, now);
-        return new CycleStatus(team.getName(), next, calendar.prepareDeadline(next), nextStatus, lastScheduled, lastManual);
+        boolean hasActiveRepo = trackedRepoRepository.existsByTeamIdAndActiveTrue(team.getId());
+        return new CycleStatus(team.getName(), next, calendar.prepareDeadline(next), nextStatus, lastScheduled, lastManual,
+                hasActiveRepo);
     }
 
     /**

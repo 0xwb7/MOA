@@ -44,6 +44,7 @@ import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -313,7 +314,7 @@ class ChangeCollectorTest {
         TrackedRepo broken = repo(1L, "owner/broken", BASE);
         TrackedRepo healthy = repo(2L, "owner/healthy", BASE);
         TrackedRepo quiet = repo(3L, "owner/quiet", BASE);
-        given(trackedRepoRepository.findAllByTeamId(10L)).willReturn(List.of(broken, healthy, quiet));
+        given(trackedRepoRepository.findAllByTeamIdAndActiveTrueOrderByIdAsc(10L)).willReturn(List.of(broken, healthy, quiet));
         given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "broken", "main"))
                 .willThrow(new RestClientException("GitHub 502"));
         givenHead("owner", "healthy", HEAD);
@@ -330,6 +331,10 @@ class ChangeCollectorTest {
                         ChangeCollector.UNKNOWN_FAILURE),
                 new RepoCollectResult("owner/healthy", RepoCollectResult.Outcome.COLLECTED, 1, 1, false, false, null),
                 new RepoCollectResult("owner/quiet", RepoCollectResult.Outcome.NO_CHANGE, 0, 0, false, false, null));
+        // 마지막 수집 시각은 GitHub 확인에 성공한 레포만 (변경이 없어도) 갱신한다
+        verify(trackedRepoRepository).markCollected(eq(2L), any(Instant.class));
+        verify(trackedRepoRepository).markCollected(eq(3L), any(Instant.class));
+        verify(trackedRepoRepository, never()).markCollected(eq(1L), any());
     }
 
     @Test
@@ -378,7 +383,7 @@ class ChangeCollectorTest {
     @Test
     void 다시_설치되지_않았으면_설치_해제를_원인으로_실패한다() {
         TrackedRepo repo = repo(1L, "owner/app", BASE);
-        given(trackedRepoRepository.findAllByTeamId(10L)).willReturn(List.of(repo));
+        given(trackedRepoRepository.findAllByTeamIdAndActiveTrueOrderByIdAsc(10L)).willReturn(List.of(repo));
         given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "app", "main")).willThrow(gone());
         given(gitHubClient.findInstallationId("owner", "app")).willReturn(Optional.empty());
 
@@ -433,7 +438,7 @@ class ChangeCollectorTest {
     @Test
     void 레포에_접근할_수_없으면_레포_선택_누락을_원인으로_실패한다() {
         TrackedRepo repo = repo(1L, "owner/app", BASE);
-        given(trackedRepoRepository.findAllByTeamId(10L)).willReturn(List.of(repo));
+        given(trackedRepoRepository.findAllByTeamIdAndActiveTrueOrderByIdAsc(10L)).willReturn(List.of(repo));
         given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "app", "main")).willThrow(httpError(HttpStatus.NOT_FOUND));
 
         assertThat(collector.collectTeam(10L)).singleElement()
@@ -445,7 +450,7 @@ class ChangeCollectorTest {
     @Test
     void GitHub가_응답하지_않으면_시간_초과를_원인으로_실패한다() {
         TrackedRepo repo = repo(1L, "owner/app", BASE);
-        given(trackedRepoRepository.findAllByTeamId(10L)).willReturn(List.of(repo));
+        given(trackedRepoRepository.findAllByTeamIdAndActiveTrueOrderByIdAsc(10L)).willReturn(List.of(repo));
         given(gitHubClient.findHeadSha(INSTALLATION_ID, "owner", "app", "main"))
                 .willThrow(new ResourceAccessException("Read timed out"));
 

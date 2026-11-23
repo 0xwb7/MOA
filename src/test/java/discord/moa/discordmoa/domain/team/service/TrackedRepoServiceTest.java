@@ -1,5 +1,6 @@
 package discord.moa.discordmoa.domain.team.service;
 
+import discord.moa.discordmoa.domain.ops.OpsNotifier;
 import discord.moa.discordmoa.domain.team.entity.Team;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.domain.team.repository.TeamRepository;
@@ -15,6 +16,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,6 +38,7 @@ class TrackedRepoServiceTest {
     private static final String URL = "https://github.com/owner/repo";
     private static final GitHubRepo GITHUB_REPO = new GitHubRepo(42L, "owner/repo", "main");
     private static final String SHA = "a".repeat(40);
+    private static final Instant NOW = Instant.parse("2026-11-23T03:00:00Z");
 
     @Mock
     private TrackedRepoRepository trackedRepoRepository;
@@ -41,13 +46,16 @@ class TrackedRepoServiceTest {
     private TeamRepository teamRepository;
     @Mock
     private GitHubClient gitHubClient;
+    @Mock
+    private OpsNotifier opsNotifier;
 
     private TrackedRepoService service;
     private Team team;
 
     @BeforeEach
     void setUp() {
-        service = new TrackedRepoService(trackedRepoRepository, teamRepository, gitHubClient, INSTALL_URL);
+        service = new TrackedRepoService(trackedRepoRepository, teamRepository, gitHubClient, opsNotifier,
+                Clock.fixed(NOW, ZoneOffset.UTC), INSTALL_URL);
         team = new Team("모아팀", CHANNEL_ID, 1L);
         ReflectionTestUtils.setField(team, "id", 10L);
     }
@@ -62,7 +70,7 @@ class TrackedRepoServiceTest {
 
         RepoRegistration registration = service.register(CHANNEL_ID, URL);
         TrackedRepo result = registration.repo();
-        assertThat(registration.refreshed()).isFalse();
+        assertThat(registration.kind()).isEqualTo(RepoRegistration.Kind.NEW);
 
         ArgumentCaptor<TrackedRepo> captor = ArgumentCaptor.forClass(TrackedRepo.class);
         verify(trackedRepoRepository).save(captor.capture());
@@ -73,6 +81,8 @@ class TrackedRepoServiceTest {
         assertThat(saved.getDefaultBranch()).isEqualTo("main");
         assertThat(saved.getLastProcessedSha()).isEqualTo(SHA);
         assertThat(saved.getInstallationId()).isEqualTo(INSTALLATION_ID);
+        assertThat(saved.isActive()).isTrue();
+        assertThat(saved.getRegisteredAt()).isEqualTo(NOW);
         assertThat(result).isSameAs(saved);
     }
 
@@ -138,6 +148,7 @@ class TrackedRepoServiceTest {
 
         verify(trackedRepoRepository, never()).save(any());
         verify(trackedRepoRepository, never()).updateInstallationId(any(), any());
+        verify(trackedRepoRepository, never()).reactivate(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -151,7 +162,7 @@ class TrackedRepoServiceTest {
 
         RepoRegistration registration = service.register(CHANNEL_ID, URL);
 
-        assertThat(registration.refreshed()).isTrue();
+        assertThat(registration.kind()).isEqualTo(RepoRegistration.Kind.REFRESHED);
         assertThat(registration.repo()).isSameAs(registered);
         assertThat(registered.getInstallationId()).isEqualTo(INSTALLATION_ID);
         assertThat(registered.getLastProcessedSha()).isEqualTo(oldCursor);

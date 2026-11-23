@@ -22,6 +22,9 @@ final class CycleStatusMessage {
 
     static String format(CycleStatus status) {
         StringBuilder text = new StringBuilder("🗓️ '").append(MarkdownSanitizer.escape(status.teamName())).append("' 회차 상태\n\n");
+        if (!status.hasActiveRepo()) {
+            text.append("⚠️ 활성 레포가 없어 정기 회차 대상이 아니에요. /레포등록 으로 등록해 주세요.\n\n");
+        }
 
         text.append("**다음 정기 회차** ").append(time(status.nextCycle()))
                 .append(" (준비 마감 ").append(time(status.nextPrepareDeadline())).append(")\n")

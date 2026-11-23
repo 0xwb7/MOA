@@ -12,6 +12,7 @@ import java.time.Instant;
  * @param nextStatus     다음 정기 회차 상태. 아직 준비 전이면 null
  * @param lastScheduled  직전 정기 회차. 없으면 null
  * @param lastManual     마지막 /발송테스트 회차. 없으면 null
+ * @param hasActiveRepo  활성 레포가 있는지. 없으면 정기 회차 대상이 아니다
  */
 public record CycleStatus(
         String teamName,
@@ -19,7 +20,8 @@ public record CycleStatus(
         Instant nextPrepareDeadline,
         DigestStatus nextStatus,
         Result lastScheduled,
-        Result lastManual
+        Result lastManual,
+        boolean hasActiveRepo
 ) {
 
     public record Result(

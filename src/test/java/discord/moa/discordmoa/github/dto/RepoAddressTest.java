@@ -51,4 +51,25 @@ class RepoAddressTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("https://github.com/owner/repo");
     }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "moa-team/hackathon-app",
+            "  moa-team/hackathon-app  ",
+            "https://github.com/moa-team/hackathon-app",
+            "https://github.com/moa-team/hackathon-app.git"
+    })
+    void 해제용_파싱은_owner_repo와_주소를_모두_받는다(String input) {
+        assertThat(RepoAddress.parseFullNameOrUrl(input).fullName()).isEqualTo("moa-team/hackathon-app");
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"hackathon-app", "moa-team/hackathon-app/extra", "moa team/app", "owner/..",
+            "https://gitlab.com/moa-team/hackathon-app"})
+    void 해제용_파싱은_레포를_가리키지_않는_입력을_거절한다(String input) {
+        assertThatThrownBy(() -> RepoAddress.parseFullNameOrUrl(input))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("owner/repo");
+    }
 }
