@@ -3,6 +3,7 @@ package discord.moa.discordmoa.domain.summary.service;
 import discord.moa.discordmoa.openai.dto.OpenAiErrorResponse;
 import discord.moa.discordmoa.openai.dto.OpenAiResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
@@ -15,6 +16,7 @@ import java.util.Set;
 /**
  * OpenAI 응답 본문에서 요약 결과를 꺼내고 검증한다. 규칙을 어기면 SummaryValidationException.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class SummaryResponseParser {
@@ -79,10 +81,15 @@ public class SummaryResponseParser {
         }
     }
 
+    public List<SummaryItem> parseItems(String outputText, Set<String> knownShas) {
+        return parseItems(outputText, knownShas, Set.of());
+    }
+
     /**
+     * @param knownPreviousIds 입력에 넣은 이전 항목 ID. 응답의 relatedPreviousItemId가 여기 없으면 그 값만 null로 바꾼다
      * @return READY/PARTIAL은 응답 순서 그대로, INTERNAL은 하나로 합쳐 맨 뒤
      */
-    public List<SummaryItem> parseItems(String outputText, Set<String> knownShas) {
+    public List<SummaryItem> parseItems(String outputText, Set<String> knownShas, Set<Long> knownPreviousIds) {
         RawSummary raw;
         try {
             raw = jsonMapper.readValue(outputText, RawSummary.class);
@@ -104,7 +111,7 @@ public class SummaryResponseParser {
                 internalTitles.add(title);
                 internalShas.addAll(shas);
             } else {
-                features.add(new SummaryItem(status, title, shas));
+                features.add(new SummaryItem(status, title, shas, relatedPreviousItemId(item, knownPreviousIds)));
             }
         }
 
@@ -149,6 +156,21 @@ public class SummaryResponseParser {
         return List.copyOf(shas);
     }
 
+    /**
+     * SHA와 달리 실패시키지 않는다: 잘못된 참고 ID는 PM에게 보이는 내용을 틀리게 만들지 않기 때문이다.
+     */
+    private static Long relatedPreviousItemId(RawItem item, Set<Long> knownPreviousIds) {
+        Long id = item.relatedPreviousItemId();
+        if (id == null) {
+            return null;
+        }
+        if (!knownPreviousIds.contains(id)) {
+            log.warn("응답의 relatedPreviousItemId가 입력에 없는 이전 항목이라 무시해요: id={}, title={}", id, item.title());
+            return null;
+        }
+        return id;
+    }
+
     private static String clip(String title) {
         if (title.length() <= MAX_TITLE_LENGTH) {
             return title;
@@ -163,6 +185,6 @@ public class SummaryResponseParser {
     record RawSummary(List<RawItem> items) {
     }
 
-    record RawItem(String status, String title, List<String> commitShas) {
+    record RawItem(String status, String title, List<String> commitShas, Long relatedPreviousItemId) {
     }
 }

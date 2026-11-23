@@ -7,6 +7,7 @@ import discord.moa.discordmoa.global.config.SummaryProperties;
 import org.springframework.stereotype.Component;
 import org.springframework.util.AntPathMatcher;
 
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -30,24 +31,35 @@ public class SummaryInputBuilder {
     private static final String OMITTED_GENERATED = "[diff 생략: 자동 생성 파일]";
     private static final String OMITTED_NO_PATCH = "[diff 없음]";
     private static final String OMITTED_SIZE = "[diff 생략: 입력 크기 제한]";
+    static final String PREVIOUS_HEADER = "## 이전에 PM에게 이미 보고한 기능 (참고용. 이번 변경 아님)\n";
 
     private final AntPathMatcher matcher = new AntPathMatcher();
     private final int maxInputChars;
+    private final DateTimeFormatter previousTime;
     private final List<String> excludedPatterns;
     private final List<String> patchOmittedPatterns;
 
     public SummaryInputBuilder(SummaryProperties properties) {
         this.maxInputChars = properties.maxInputChars();
+        this.previousTime = DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(properties.zone());
         this.excludedPatterns = lowerCase(properties.excludedFiles());
         this.patchOmittedPatterns = lowerCase(properties.patchOmittedFiles());
     }
 
     public SummaryInput build(List<ChangeBatch> batches) {
+        return build(batches, List.of());
+    }
+
+    /**
+     * @param previousItems 이전 회차에 PM에게 보고한 항목 (오래된 순). 비어 있으면 섹션을 넣지 않는다
+     */
+    public SummaryInput build(List<ChangeBatch> batches, List<PreviousItem> previousItems) {
         List<RepoBlock> repos = toBlocks(batches);
         Set<String> knownShas = new LinkedHashSet<>();
         repos.forEach(repo -> repo.commits.forEach(commit -> knownShas.add(commit.sha)));
+        List<PreviousItem> previous = new ArrayList<>(previousItems);
 
-        int length = render(repos).length();
+        int length = renderPrevious(previous).length() + render(repos).length();
 
         int droppedPatchCount = 0;
         if (length > maxInputChars) {
@@ -74,8 +86,33 @@ public class SummaryInputBuilder {
             messagesShortened = true;
         }
 
-        String text = render(repos);
-        return new SummaryInput(text, knownShas, droppedPatchCount, messagesShortened, text.length() > maxInputChars);
+        // 이전 항목은 서버·화면이 다른 회차에 나뉜 기능을 판단하는 핵심 근거라 가장 마지막에, 오래된 것부터 뺀다
+        String changes = render(repos);
+        int droppedPreviousCount = 0;
+        while (!previous.isEmpty() && renderPrevious(previous).length() + changes.length() > maxInputChars) {
+            previous.removeFirst();
+            droppedPreviousCount++;
+        }
+
+        String text = renderPrevious(previous) + changes;
+        Set<Long> knownPreviousIds = new LinkedHashSet<>();
+        previous.forEach(item -> knownPreviousIds.add(item.id()));
+        return new SummaryInput(text, knownShas, knownPreviousIds, droppedPatchCount, messagesShortened,
+                droppedPreviousCount, text.length() > maxInputChars);
+    }
+
+    private String renderPrevious(List<PreviousItem> previous) {
+        if (previous.isEmpty()) {
+            return "";
+        }
+        StringBuilder text = new StringBuilder(PREVIOUS_HEADER);
+        for (PreviousItem item : previous) {
+            text.append("- [P").append(item.id()).append("] ")
+                    .append(previousTime.format(item.scheduledFor())).append(' ')
+                    .append(item.status().emoji()).append(' ')
+                    .append(item.title()).append('\n');
+        }
+        return text.append('\n').toString();
     }
 
     boolean isExcluded(String filename) {

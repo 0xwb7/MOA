@@ -41,7 +41,8 @@ class LlmConfigTest {
             assertThat(openAi.baseUrl()).isEqualTo("https://api.openai.com/v1");
 
             SummaryProperties summary = context.getBean(SummaryProperties.class);
-            assertThat(summary.promptVersion()).isEqualTo("v1");
+            assertThat(summary.promptVersion()).isEqualTo("v2");
+            assertThat(summary.previousItems()).isEqualTo(new SummaryProperties.PreviousItems(14, 30));
             assertThat(summary.maxInputChars()).isEqualTo(60_000);
             assertThat(summary.zone()).isEqualTo(ZoneId.of("Asia/Seoul"));
             assertThat(summary.dailyMaxCalls(LlmCallPurpose.DIGEST)).isEqualTo(60);

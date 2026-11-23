@@ -47,6 +47,46 @@ class SummaryResponseParserTest {
     }
 
     @Test
+    void 이전_항목_ID를_함께_받는다() {
+        List<SummaryItem> items = parser.parseItems("""
+                {"items":[
+                  {"status":"READY","title":"로그인을 직접 써볼 수 있어요","commitShas":["%s"],"relatedPreviousItemId":12},
+                  {"status":"PARTIAL","title":"회원가입 서버 준비","commitShas":["%s"],"relatedPreviousItemId":null}
+                ]}""".formatted(sha('a'), sha('b')), KNOWN, Set.of(12L, 15L));
+
+        assertThat(items).extracting(SummaryItem::relatedPreviousItemId).containsExactly(12L, null);
+    }
+
+    @Test
+    void 입력에_없는_이전_항목_ID는_null로_바꾸고_요약은_성공한다() {
+        List<SummaryItem> items = parser.parseItems("""
+                {"items":[{"status":"READY","title":"로그인을 직접 써볼 수 있어요","commitShas":["%s"],"relatedPreviousItemId":999}]}"""
+                .formatted(sha('a')), KNOWN, Set.of(12L));
+
+        assertThat(items).singleElement().satisfies(item -> {
+            assertThat(item.status()).isEqualTo(SummaryStatus.READY);
+            assertThat(item.relatedPreviousItemId()).isNull();
+        });
+    }
+
+    @Test
+    void 내부_작업은_합치면서_이전_항목_ID를_두지_않는다() {
+        List<SummaryItem> items = parser.parseItems("""
+                {"items":[{"status":"INTERNAL","title":"코드 정리","commitShas":["%s"],"relatedPreviousItemId":12}]}"""
+                .formatted(sha('a')), KNOWN, Set.of(12L));
+
+        assertThat(items.getFirst().relatedPreviousItemId()).isNull();
+    }
+
+    @Test
+    void 이전_항목_ID가_없는_v1_응답도_그대로_읽는다() {
+        List<SummaryItem> items = parser.parseItems("""
+                {"items":[{"status":"PARTIAL","title":"로그인 서버","commitShas":["%s"]}]}""".formatted(sha('a')), KNOWN);
+
+        assertThat(items.getFirst().relatedPreviousItemId()).isNull();
+    }
+
+    @Test
     void 알_수_없는_status는_스키마_위반이다() {
         assertInvalid("""
                 {"items":[{"status":"DONE","title":"로그인","commitShas":["%s"]}]}""".formatted(sha('a')), "스키마");

@@ -41,4 +41,11 @@ public class SummaryPrompt {
     public String text() {
         return text;
     }
+
+    /**
+     * v2부터 이전 회차에 보고한 항목을 입력에 넣고 응답에 relatedPreviousItemId를 받는다. v1은 기존 동작 그대로.
+     */
+    public boolean usesPreviousItems() {
+        return !"v1".equals(version);
+    }
 }

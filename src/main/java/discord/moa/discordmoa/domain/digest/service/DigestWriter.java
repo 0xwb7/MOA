@@ -230,7 +230,8 @@ public class DigestWriter {
             summaryItem.commitShas().forEach(sha -> repos.add(repoBySha.get(sha)));
             TrackedRepo repo = repos.size() == 1 ? repos.iterator().next() : null;
             digestItemRepository.save(new DigestItem(digest, repo, summaryFormatter.itemText(summaryItem),
-                    summaryItem.commitShas()));
+                    summaryItem.commitShas(), summaryItem.status(), summaryItem.title(),
+                    summaryItem.relatedPreviousItemId()));
         }
     }
 

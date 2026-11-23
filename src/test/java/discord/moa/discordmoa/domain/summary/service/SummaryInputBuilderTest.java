@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Instant;
 import java.util.List;
 
 import static discord.moa.discordmoa.domain.summary.service.SummaryFixtures.batch;
@@ -179,6 +180,80 @@ class SummaryInputBuilderTest {
 
         assertThat(input.overLimit()).isTrue();
         assertThat(input.messagesShortened()).isTrue();
+    }
+
+    // ---- 이전에 보고한 항목 (v2) ----
+
+    private static final PreviousItem P12 = new PreviousItem(12L, Instant.parse("2026-11-23T00:00:00Z"),
+            SummaryStatus.PARTIAL, "로그인 서버 기능이 준비됐어요 (화면 연결 전)");
+    private static final PreviousItem P15 = new PreviousItem(15L, Instant.parse("2026-11-23T12:00:00Z"),
+            SummaryStatus.READY, "회원가입을 직접 써볼 수 있어요");
+    private static final PreviousItem P18 = new PreviousItem(18L, Instant.parse("2026-11-24T00:00:00Z"),
+            SummaryStatus.PARTIAL, "비밀번호 찾기 화면이 생겼어요 (서버는 아직이에요)");
+
+    @Test
+    void 이전_항목을_이번_변경_앞에_참고_섹션으로_넣는다() {
+        List<ChangeBatch> batches = List.of(batch(1L, frontend, List.of(commit(sha('a'), "로그인 화면")), List.of()));
+
+        SummaryInput input = builder(NO_LIMIT).build(batches, List.of(P12, P15));
+
+        assertThat(input.text()).startsWith("""
+                ## 이전에 PM에게 이미 보고한 기능 (참고용. 이번 변경 아님)
+                - [P12] 11-23 09:00 🟡 로그인 서버 기능이 준비됐어요 (화면 연결 전)
+                - [P15] 11-23 21:00 🟢 회원가입을 직접 써볼 수 있어요
+
+                # 레포: team1/frontend
+                """);
+        assertThat(input.knownPreviousIds()).containsExactly(12L, 15L);
+        assertThat(input.knownShas()).containsExactly(sha('a'));
+        assertThat(input.droppedPreviousCount()).isZero();
+    }
+
+    @Test
+    void 이전_항목이_없으면_섹션을_넣지_않는다() {
+        List<ChangeBatch> batches = List.of(batch(1L, frontend, List.of(commit(sha('a'), "로그인 화면")), List.of()));
+
+        SummaryInput input = builder(NO_LIMIT).build(batches, List.of());
+
+        assertThat(input.text()).startsWith("# 레포: team1/frontend").doesNotContain("이전에 PM에게");
+        assertThat(input.knownPreviousIds()).isEmpty();
+        assertThat(builder(NO_LIMIT).build(batches).text()).isEqualTo(input.text());
+    }
+
+    @Test
+    void 상한을_넘으면_patch와_메시지를_먼저_줄이고_이전_항목은_마지막까지_남긴다() {
+        List<ChangeBatch> batches = shrinkableBatches();
+        List<PreviousItem> previous = List.of(P12, P15, P18);
+        int minimalChanges = builder(1).build(batches).text().length();      // patch 제거 + 메시지 첫 줄까지 줄인 길이
+        int allPrevious = builder(NO_LIMIT).build(List.of(), previous).text().length();
+
+        SummaryInput input = builder(minimalChanges + allPrevious).build(batches, previous);
+
+        assertThat(input.droppedPatchCount()).isEqualTo(1);
+        assertThat(input.messagesShortened()).isTrue();
+        assertThat(input.droppedPreviousCount()).isZero();
+        assertThat(input.knownPreviousIds()).containsExactly(12L, 15L, 18L);
+        assertThat(input.overLimit()).isFalse();
+    }
+
+    @Test
+    void 그래도_넘으면_이전_항목을_오래된_것부터_뺀다() {
+        List<ChangeBatch> batches = shrinkableBatches();
+        int minimalChanges = builder(1).build(batches).text().length();
+        int newestTwo = builder(NO_LIMIT).build(List.of(), List.of(P15, P18)).text().length();
+
+        SummaryInput input = builder(minimalChanges + newestTwo).build(batches, List.of(P12, P15, P18));
+
+        assertThat(input.droppedPreviousCount()).isEqualTo(1);
+        assertThat(input.knownPreviousIds()).containsExactly(15L, 18L);
+        assertThat(input.text()).doesNotContain("[P12]").contains("[P15]", "[P18]");
+        assertThat(input.overLimit()).isFalse();
+    }
+
+    private List<ChangeBatch> shrinkableBatches() {
+        return List.of(batch(1L, backend,
+                List.of(commit(sha('a'), "로그인 API 추가\n\n" + "상세 설명 ".repeat(300))),
+                List.of(file("AuthController.java", "+" + "A".repeat(3000)))));
     }
 
     private static SummaryInputBuilder builder(int maxInputChars) {

@@ -33,6 +33,16 @@ class SummaryPreviewMessageTest {
     }
 
     @Test
+    void 이전_항목에서_이어진_항목은_운영진에게_표시한다() {
+        SummaryResult result = SummaryResult.success(List.of(1L), List.of(
+                new SummaryItem(SummaryStatus.READY, "로그인을 직접 써볼 수 있어요", List.of("a"), 12L),
+                new SummaryItem(SummaryStatus.PARTIAL, "회원가입 서버 준비", List.of("b"))), STATS);
+
+        assertThat(SummaryPreviewMessage.format(new SummaryPreview("1팀", result)))
+                .contains("🟢 로그인을 직접 써볼 수 있어요 (커밋 1개)\n   ↗ 이전 항목 #12에서 이어짐\n🟡 회원가입 서버 준비 (커밋 1개)\n");
+    }
+
+    @Test
     void 실패하면_사유를_보여준다() {
         SummaryResult result = SummaryResult.fallback(List.of(1L), "오늘 LLM 호출 상한(40회)에 도달했어요",
                 new SummaryStats("v1", "gpt-6.1-terra", 0, 0, 0, 0, 0));

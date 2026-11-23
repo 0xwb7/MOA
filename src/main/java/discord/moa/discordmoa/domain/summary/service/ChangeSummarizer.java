@@ -45,6 +45,7 @@ public class ChangeSummarizer {
     private final LlmCallRepository llmCallRepository;
     private final OpenAiClient openAiClient;
     private final SummaryInputBuilder inputBuilder;
+    private final PreviousItemsReader previousItemsReader;
     private final SummaryPrompt prompt;
     private final SummaryResponseParser parser;
     private final OpenAiProperties openAiProperties;
@@ -55,15 +56,17 @@ public class ChangeSummarizer {
     @Autowired
     public ChangeSummarizer(ChangeBatchRepository changeBatchRepository, TeamRepository teamRepository,
                             LlmCallRepository llmCallRepository, OpenAiClient openAiClient,
-                            SummaryInputBuilder inputBuilder, SummaryPrompt prompt, SummaryResponseParser parser,
+                            SummaryInputBuilder inputBuilder, PreviousItemsReader previousItemsReader,
+                            SummaryPrompt prompt, SummaryResponseParser parser,
                             OpenAiProperties openAiProperties, SummaryProperties summaryProperties) {
-        this(changeBatchRepository, teamRepository, llmCallRepository, openAiClient, inputBuilder, prompt, parser,
-                openAiProperties, summaryProperties, Clock.systemUTC(), Thread::sleep);
+        this(changeBatchRepository, teamRepository, llmCallRepository, openAiClient, inputBuilder, previousItemsReader,
+                prompt, parser, openAiProperties, summaryProperties, Clock.systemUTC(), Thread::sleep);
     }
 
     ChangeSummarizer(ChangeBatchRepository changeBatchRepository, TeamRepository teamRepository,
                      LlmCallRepository llmCallRepository, OpenAiClient openAiClient,
-                     SummaryInputBuilder inputBuilder, SummaryPrompt prompt, SummaryResponseParser parser,
+                     SummaryInputBuilder inputBuilder, PreviousItemsReader previousItemsReader,
+                     SummaryPrompt prompt, SummaryResponseParser parser,
                      OpenAiProperties openAiProperties, SummaryProperties summaryProperties,
                      Clock clock, Sleeper sleeper) {
         this.changeBatchRepository = changeBatchRepository;
@@ -71,6 +74,7 @@ public class ChangeSummarizer {
         this.llmCallRepository = llmCallRepository;
         this.openAiClient = openAiClient;
         this.inputBuilder = inputBuilder;
+        this.previousItemsReader = previousItemsReader;
         this.prompt = prompt;
         this.parser = parser;
         this.openAiProperties = openAiProperties;
@@ -101,11 +105,14 @@ public class ChangeSummarizer {
             return fallback(attempts, batchIds, "OPENAI_API_KEY가 설정되지 않았어요");
         }
 
-        SummaryInput input = inputBuilder.build(batches);
+        // v2부터: 이전 회차에 보고한 기능을 참고로 넣어, 서버·화면이 다른 회차에 나뉘어 완성된 기능도 READY로 판단하게 한다
+        List<PreviousItem> previousItems = prompt.usesPreviousItems() ? previousItemsReader.read(teamId) : List.of();
+        SummaryInput input = inputBuilder.build(batches, previousItems);
         attempts.inputChars = input.text().length();
-        if (input.droppedPatchCount() > 0 || input.messagesShortened()) {
-            log.info("LLM 입력을 줄였어요: teamId={}, patch 제외 파일 {}개, 메시지 첫 줄만 {}, 최종 {}자",
-                    teamId, input.droppedPatchCount(), input.messagesShortened(), attempts.inputChars);
+        if (input.droppedPatchCount() > 0 || input.messagesShortened() || input.droppedPreviousCount() > 0) {
+            log.info("LLM 입력을 줄였어요: teamId={}, patch 제외 파일 {}개, 메시지 첫 줄만 {}, 이전 항목 제외 {}개, 최종 {}자",
+                    teamId, input.droppedPatchCount(), input.messagesShortened(), input.droppedPreviousCount(),
+                    attempts.inputChars);
         }
         if (input.overLimit()) {
             return fallback(attempts, batchIds, "입력을 줄여도 " + attempts.inputChars + "자라서 상한("
@@ -163,7 +170,8 @@ public class ChangeSummarizer {
                     outputTokens = response.usage().outputTokens();
                     attempts.addTokens(inputTokens, outputTokens);
                 }
-                List<SummaryItem> items = parser.parseItems(parser.outputText(response), input.knownShas());
+                List<SummaryItem> items = parser.parseItems(parser.outputText(response), input.knownShas(),
+                        input.knownPreviousIds());
                 record(attempts, elapsed, inputTokens, outputTokens, true, null, body);
                 return SummaryResult.success(batchIds, items, attempts.stats());
             } catch (SummaryValidationException e) {
@@ -181,7 +189,8 @@ public class ChangeSummarizer {
                 input,
                 effort == null || effort.isBlank() ? null : new OpenAiRequest.Reasoning(effort),
                 openAiProperties.maxOutputTokens(),
-                new OpenAiRequest.Text(OpenAiRequest.Format.jsonSchema(SummarySchema.NAME, SummarySchema.schema())),
+                new OpenAiRequest.Text(OpenAiRequest.Format.jsonSchema(SummarySchema.NAME,
+                        SummarySchema.schema(prompt.usesPreviousItems()))),
                 false
         );
     }

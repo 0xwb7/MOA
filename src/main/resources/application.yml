@@ -38,7 +38,7 @@ openai:
   max-output-tokens: 8000
 
 summary:
-  prompt-version: v1
+  prompt-version: v2   # v1: 이번 회차 변경만 / v2: 이전에 보고한 기능도 참고로 넣음 (ADR-004)
   max-input-chars: 60000
   # 일일 상한은 용도별로 따로 센다 (재시도 포함). 정기 발송은 하루 12회 × 최대 3번 시도 = 36회
   daily-max-calls:
@@ -48,6 +48,9 @@ summary:
     digest: 1500000
     preview: 500000
   zone: Asia/Seoul
+  previous-items:            # v2: 이전 회차에 PM에게 보고한 기능(READY·PARTIAL)을 LLM 입력에 참고로 넣는 범위
+    lookback-days: 14
+    max-items: 30
   excluded-files:
     - "**/.env"
     - "**/.env.*"

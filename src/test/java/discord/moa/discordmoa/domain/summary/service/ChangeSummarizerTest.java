@@ -66,6 +66,8 @@ class ChangeSummarizerTest {
     private LlmCallRepository llmCallRepository;
     @Mock
     private OpenAiClient openAiClient;
+    @Mock
+    private PreviousItemsReader previousItemsReader;
 
     private final List<ChangeBatch> batches = new ArrayList<>();
     private final List<LlmCall> calls = new ArrayList<>();
@@ -150,6 +152,74 @@ class ChangeSummarizerTest {
         String json = JSON.writeValueAsString(request);
         assertThat(json).contains("\"max_output_tokens\":8000", "\"additionalProperties\":false",
                 "\"required\":[\"status\",\"title\",\"commitShas\"]", "\"enum\":[\"READY\",\"PARTIAL\",\"INTERNAL\"]");
+    }
+
+    // ---- 프롬프트 v2: 이전에 보고한 항목 ----
+
+    @Test
+    void v2는_이전에_보고한_항목을_입력에_넣고_응답의_이전_항목_ID를_받는다() {
+        given(previousItemsReader.read(TEAM_ID)).willReturn(List.of(new PreviousItem(12L,
+                Instant.parse("2026-11-19T12:00:00Z"), SummaryStatus.PARTIAL, "로그인 서버 기능이 준비됐어요 (화면 연결 전)")));
+        given(openAiClient.createResponse(any())).willReturn(response("""
+                {"items":[{"status":"READY","title":"로그인을 직접 써볼 수 있어요","commitShas":["%s","%s"],"relatedPreviousItemId":12}]}"""
+                .formatted(sha('a'), sha('b'))));
+
+        SummaryResult result = summarizer(properties("v2", 60_000, 40, 1_000_000)).summarize(TEAM_ID, LlmCallPurpose.DIGEST);
+
+        assertThat(result.succeeded()).isTrue();
+        assertThat(result.items()).singleElement().satisfies(item -> {
+            assertThat(item.status()).isEqualTo(SummaryStatus.READY);
+            assertThat(item.relatedPreviousItemId()).isEqualTo(12L);
+        });
+        OpenAiRequest request = capturedRequest();
+        assertThat(request.input()).startsWith("## 이전에 PM에게 이미 보고한 기능 (참고용. 이번 변경 아님)\n"
+                + "- [P12] 11-19 21:00 🟡 로그인 서버 기능이 준비됐어요 (화면 연결 전)\n");
+        assertThat(request.instructions()).contains("[이전에 보고한 기능]", "relatedPreviousItemId");
+        assertThat(JSON.writeValueAsString(request)).contains(
+                "\"relatedPreviousItemId\":{\"type\":[\"integer\",\"null\"]}",
+                "\"required\":[\"status\",\"title\",\"commitShas\",\"relatedPreviousItemId\"]");
+        assertThat(calls.getFirst().getPromptVersion()).isEqualTo("v2");
+        assertThat(result.stats().promptVersion()).isEqualTo("v2");
+    }
+
+    @Test
+    void v2에서_응답의_이전_항목_ID가_입력에_없으면_그_값만_버리고_요약은_성공한다() {
+        given(previousItemsReader.read(TEAM_ID)).willReturn(List.of(new PreviousItem(12L,
+                Instant.parse("2026-11-19T12:00:00Z"), SummaryStatus.PARTIAL, "로그인 서버")));
+        given(openAiClient.createResponse(any())).willReturn(response("""
+                {"items":[{"status":"PARTIAL","title":"로그인 화면","commitShas":["%s"],"relatedPreviousItemId":999}]}"""
+                .formatted(sha('b'))));
+
+        SummaryResult result = summarizer(properties("v2", 60_000, 40, 1_000_000)).summarize(TEAM_ID, LlmCallPurpose.DIGEST);
+
+        assertThat(result.succeeded()).isTrue();
+        assertThat(result.items().getFirst().relatedPreviousItemId()).isNull();
+    }
+
+    @Test
+    void v2에서_이전_항목이_없으면_섹션을_넣지_않는다() {
+        given(previousItemsReader.read(TEAM_ID)).willReturn(List.of());
+        given(openAiClient.createResponse(any())).willReturn(response(
+                "{\"items\":[{\"status\":\"PARTIAL\",\"title\":\"로그인\",\"commitShas\":[\"%s\"],\"relatedPreviousItemId\":null}]}".formatted(sha('a'))));
+
+        summarizer(properties("v2", 60_000, 40, 1_000_000)).summarize(TEAM_ID, LlmCallPurpose.DIGEST);
+
+        assertThat(capturedRequest().input()).startsWith("# 레포:").doesNotContain("이전에 PM에게");
+    }
+
+    @Test
+    void v1은_이전_항목을_읽지_않고_스키마도_기존과_같다() {
+        given(openAiClient.createResponse(any())).willReturn(response(
+                "{\"items\":[{\"status\":\"PARTIAL\",\"title\":\"로그인\",\"commitShas\":[\"%s\"]}]}".formatted(sha('a'))));
+
+        summarizer(40, 1_000_000).summarize(TEAM_ID, LlmCallPurpose.DIGEST);
+
+        verify(previousItemsReader, never()).read(any());
+        OpenAiRequest request = capturedRequest();
+        assertThat(request.input()).doesNotContain("이전에 PM에게");
+        assertThat(JSON.writeValueAsString(request)).doesNotContain("relatedPreviousItemId")
+                .contains("\"required\":[\"status\",\"title\",\"commitShas\"]");
+        assertThat(calls.getFirst().getPromptVersion()).isEqualTo("v1");
     }
 
     @Test
@@ -408,7 +478,7 @@ class ChangeSummarizerTest {
         SummaryProperties base = properties(60_000, 1, 1_000_000);
         return summarizer(new SummaryProperties(base.promptVersion(), base.maxInputChars(), dailyMaxCalls,
                 Map.of(LlmCallPurpose.DIGEST, 1_000_000L, LlmCallPurpose.PREVIEW, 1_000_000L), base.zone(),
-                base.excludedFiles(), base.patchOmittedFiles()));
+                base.excludedFiles(), base.patchOmittedFiles(), base.previousItems()));
     }
 
     private ChangeSummarizer summarizer(int dailyMaxCalls, long dailyMaxTokens, int maxInputChars) {
@@ -419,9 +489,15 @@ class ChangeSummarizerTest {
         OpenAiProperties openAiProperties = new OpenAiProperties("test-key", "http://localhost", "gpt-test", "low",
                 Duration.ofSeconds(60), 2, 8000);
         return new ChangeSummarizer(changeBatchRepository, teamRepository, llmCallRepository, openAiClient,
-                new SummaryInputBuilder(summaryProperties), new SummaryPrompt(summaryProperties),
+                new SummaryInputBuilder(summaryProperties), previousItemsReader, new SummaryPrompt(summaryProperties),
                 new SummaryResponseParser(JSON), openAiProperties, summaryProperties,
                 Clock.fixed(NOW, ZoneOffset.UTC), waits::add);
+    }
+
+    private OpenAiRequest capturedRequest() {
+        ArgumentCaptor<OpenAiRequest> captor = ArgumentCaptor.forClass(OpenAiRequest.class);
+        verify(openAiClient).createResponse(captor.capture());
+        return captor.getValue();
     }
 
     private static String response(String outputText) {

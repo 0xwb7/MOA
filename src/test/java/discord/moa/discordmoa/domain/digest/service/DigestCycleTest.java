@@ -22,6 +22,9 @@ import discord.moa.discordmoa.domain.scheduler.CycleCalendar;
 import discord.moa.discordmoa.domain.scheduler.DigestRecovery;
 import discord.moa.discordmoa.domain.summary.entity.LlmCallPurpose;
 import discord.moa.discordmoa.domain.summary.service.ChangeSummarizer;
+import discord.moa.discordmoa.domain.summary.service.PreviousItem;
+import discord.moa.discordmoa.domain.summary.service.PreviousItemsReader;
+import discord.moa.discordmoa.domain.summary.service.SummaryFixturesBridge;
 import discord.moa.discordmoa.domain.summary.service.SummaryItem;
 import discord.moa.discordmoa.domain.summary.service.SummaryResult;
 import discord.moa.discordmoa.domain.summary.service.SummaryStatus;
@@ -593,6 +596,44 @@ class DigestCycleTest {
 
         assertThat(cycleDigest(CYCLE).getType()).isEqualTo(DigestType.LLM);
         verify(opsNotifier, never()).notify(any());
+    }
+
+    // ---- 이전에 보고한 항목 (v2) ----
+
+    @Test
+    void LLM_항목은_상태_제목_이전_항목_ID를_함께_저장한다() {
+        ChangeBatch login = collected(frontend, "로그인 화면");
+        given(changeSummarizer.summarize(anyLong(), any())).willAnswer(inv -> SummaryResult.success(collectedIds(), List.of(
+                new SummaryItem(SummaryStatus.READY, "로그인을 직접 써볼 수 있어요", List.of(sha(login)), 77L),
+                new SummaryItem(SummaryStatus.INTERNAL, "코드 정리", List.of(sha(login)))), null));
+
+        preparer.prepareCycle(CYCLE);
+
+        List<DigestItem> saved = items(cycleDigest(CYCLE));
+        assertThat(saved).extracting(DigestItem::getItemStatus).containsExactly(SummaryStatus.READY, SummaryStatus.INTERNAL);
+        assertThat(saved).extracting(DigestItem::getTitle).containsExactly("로그인을 직접 써볼 수 있어요", "코드 정리");
+        assertThat(saved).extracting(DigestItem::getRelatedPreviousItemId).containsExactly(77L, null);
+        assertThat(saved.getFirst().getText()).isEqualTo("🟢 로그인을 직접 써볼 수 있어요");   // PM 메시지에는 이전 항목 표시 없음
+    }
+
+    @Test
+    void 일회차에_보낸_PARTIAL_항목을_이회차_요약에서_이전_항목으로_읽는다() {
+        collected(backend, "로그인 API 추가");
+        givenSummaryLlm(new SummaryStatus[]{SummaryStatus.PARTIAL}, "로그인 서버 기능이 준비됐어요 (화면 연결 전)");
+        preparer.prepareCycle(CYCLE);
+        clock.set(CYCLE);
+        service.sendScheduled(team, CYCLE);
+
+        clock.set(kst(20, 30));
+        List<PreviousItem> previous = new PreviousItemsReader(digestItemRepository,
+                SummaryFixturesBridge.v2Properties(), clock).read(team.getId());
+
+        assertThat(previous).singleElement().satisfies(item -> {
+            assertThat(item.id()).isEqualTo(items(cycleDigest(CYCLE)).getFirst().getId());
+            assertThat(item.status()).isEqualTo(SummaryStatus.PARTIAL);
+            assertThat(item.title()).isEqualTo("로그인 서버 기능이 준비됐어요 (화면 연결 전)");
+            assertThat(item.scheduledFor()).isEqualTo(CYCLE);
+        });
     }
 
     // ---- 레포가 없는 팀 ----

@@ -32,10 +32,17 @@ final class SummaryFixtures {
      * 일일 상한은 용도(DIGEST, PREVIEW)마다 같은 값으로 둔다. 파일 패턴은 실제 application.yml 값을 그대로 쓴다.
      */
     static SummaryProperties properties(int maxInputChars, int dailyMaxCalls, long dailyMaxTokens) {
-        return new SummaryProperties("v1", maxInputChars,
+        return properties("v1", maxInputChars, dailyMaxCalls, dailyMaxTokens);
+    }
+
+    /**
+     * @param promptVersion v1: 이번 회차 변경만 / v2: 이전에 보고한 항목도 입력에 넣음
+     */
+    static SummaryProperties properties(String promptVersion, int maxInputChars, int dailyMaxCalls, long dailyMaxTokens) {
+        return new SummaryProperties(promptVersion, maxInputChars,
                 Map.of(LlmCallPurpose.DIGEST, dailyMaxCalls, LlmCallPurpose.PREVIEW, dailyMaxCalls),
                 Map.of(LlmCallPurpose.DIGEST, dailyMaxTokens, LlmCallPurpose.PREVIEW, dailyMaxTokens),
-                SEOUL, ymlList("summary.excluded-files"), ymlList("summary.patch-omitted-files"));
+                SEOUL, ymlList("summary.excluded-files"), ymlList("summary.patch-omitted-files"), null);
     }
 
     static Team team() {
