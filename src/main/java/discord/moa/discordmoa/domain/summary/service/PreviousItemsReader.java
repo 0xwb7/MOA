@@ -18,6 +18,7 @@ import java.util.List;
  * 같은 팀이 이전 회차에 PM에게 보고한 기능 항목을 읽는다.
  * 조건: 발송된(SENT) LLM 회차의 READY·PARTIAL 항목, 최근 lookback-days 이내, 최신 max-items개.
  * FALLBACK(커밋 목록)·NO_CHANGE·INTERNAL은 기능 정보가 아니라서 넣지 않는다.
+ * 같은 팀의 발송된 항목이 이미 이어받은(relatedPreviousItemId) 항목도 넣지 않는다. 이어받은 항목이 대신 목록에 남는다.
  */
 @Component
 public class PreviousItemsReader {

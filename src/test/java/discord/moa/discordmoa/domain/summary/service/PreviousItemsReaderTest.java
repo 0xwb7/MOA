@@ -140,6 +140,42 @@ class PreviousItemsReaderTest {
         assertThat(reader(SummaryProperties.PreviousItems.DEFAULT).read(team.getId())).isEmpty();
     }
 
+    @Test
+    void 이미_이어받은_이전_항목은_빠지고_이어받은_항목은_남는다() {
+        DigestItem p12 = item(digest(team, hoursAgo(24), DigestType.LLM, DigestStatus.SENT), repo,
+                SummaryStatus.PARTIAL, "로그인 서버 기능이 준비됐어요 (화면 연결 전)");
+        DigestItem other = item(digest(team, hoursAgo(24 + 1), DigestType.LLM, DigestStatus.SENT), repo,
+                SummaryStatus.PARTIAL, "회원가입 서버 기능이 준비됐어요 (화면 연결 전)");
+        DigestItem p20 = related(digest(team, hoursAgo(12), DigestType.LLM, DigestStatus.SENT), repo,
+                "로그인을 직접 써볼 수 있어요", p12);
+
+        List<PreviousItem> items = reader(SummaryProperties.PreviousItems.DEFAULT).read(team.getId());
+
+        assertThat(items).extracting(PreviousItem::id).containsExactly(other.getId(), p20.getId());
+    }
+
+    @Test
+    void 다른_팀_항목이_같은_ID를_가리켜도_빠지지_않는다() {
+        DigestItem p12 = item(digest(team, hoursAgo(24), DigestType.LLM, DigestStatus.SENT), repo,
+                SummaryStatus.PARTIAL, "로그인 서버 기능이 준비됐어요 (화면 연결 전)");
+        related(digest(otherTeam, hoursAgo(12), DigestType.LLM, DigestStatus.SENT), otherRepo,
+                "다른 팀 로그인", p12);
+
+        assertThat(reader(SummaryProperties.PreviousItems.DEFAULT).read(team.getId()))
+                .extracting(PreviousItem::id).containsExactly(p12.getId());
+    }
+
+    @Test
+    void 이어받은_회차가_발송_실패했거나_아직_안_보냈으면_빠지지_않는다() {
+        DigestItem p12 = item(digest(team, hoursAgo(24), DigestType.LLM, DigestStatus.SENT), repo,
+                SummaryStatus.PARTIAL, "로그인 서버 기능이 준비됐어요 (화면 연결 전)");
+        related(digest(team, hoursAgo(12), DigestType.LLM, DigestStatus.FAILED), repo, "발송 실패 회차", p12);
+        related(digest(team, hoursAgo(1), DigestType.LLM, DigestStatus.READY), repo, "아직 안 보낸 회차", p12);
+
+        assertThat(reader(SummaryProperties.PreviousItems.DEFAULT).read(team.getId()))
+                .extracting(PreviousItem::id).containsExactly(p12.getId());
+    }
+
     // ---- helpers ----
 
     private PreviousItemsReader reader(SummaryProperties.PreviousItems settings) {
@@ -164,6 +200,11 @@ class PreviousItemsReaderTest {
     private DigestItem item(Digest digest, TrackedRepo itemRepo, SummaryStatus status, String title) {
         return digestItemRepository.save(new DigestItem(digest, itemRepo, status.emoji() + " " + title, List.of("a"),
                 status, title, null));
+    }
+
+    private DigestItem related(Digest digest, TrackedRepo itemRepo, String title, DigestItem previous) {
+        return digestItemRepository.save(new DigestItem(digest, itemRepo, "🟢 " + title, List.of("b"),
+                SummaryStatus.READY, title, previous.getId()));
     }
 
     private static Instant hoursAgo(long hours) {

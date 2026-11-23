@@ -33,6 +33,8 @@ public interface DigestItemRepository extends JpaRepository<DigestItem, Long> {
 
     /**
      * 같은 팀이 이전 회차에 PM에게 보고한 기능 항목: 발송된(SENT) LLM 회차의, 지정한 상태(READY·PARTIAL)인 항목을 최신순으로.
+     * 같은 팀의 발송된 다른 항목이 relatedPreviousItemId로 이미 이어받은 항목은 뺀다 (예: P12 🟡를 P20 🟢가 이어받으면 P12 제외).
+     * 이어받은 회차가 발송 실패했거나 아직 안 보냈으면 PM이 이어진 결과를 못 봤으니 남긴다.
      */
     @Query("""
             select new discord.moa.discordmoa.domain.digest.repository.PreviousItemRow(i.id, d.scheduledFor, i.itemStatus, i.title)
@@ -42,6 +44,11 @@ public interface DigestItemRepository extends JpaRepository<DigestItem, Long> {
               and d.type = :llm
               and i.itemStatus in :statuses
               and d.sentAt >= :since
+              and not exists (
+                  select 1 from DigestItem n join n.digest nd
+                  where n.relatedPreviousItemId = i.id
+                    and nd.team.id = :teamId
+                    and nd.status = :sent)
             order by d.sentAt desc, i.id desc
             """)
     List<PreviousItemRow> findPreviousItems(@Param("teamId") Long teamId, @Param("sent") DigestStatus sent,

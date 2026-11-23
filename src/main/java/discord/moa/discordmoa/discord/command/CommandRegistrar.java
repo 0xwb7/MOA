@@ -1,6 +1,7 @@
 package discord.moa.discordmoa.discord.command;
 
 import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions;
 import net.dv8tion.jda.api.interactions.commands.OptionType;
@@ -11,8 +12,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class CommandRegistrar {
 
-    public CommandRegistrar(JDA jda, @Value("${discord.test-guild-id}") String guildId) {
-        jda.getGuildById(guildId)
+    public CommandRegistrar(JDA jda, @Value("${discord.guild-id}") String guildId) {
+        requireGuild(jda, guildId)
                 .updateCommands()
                 .addCommands(
                         Commands.slash("ping", "봇 상태 확인"),
@@ -45,5 +46,26 @@ public class CommandRegistrar {
                                 .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER))
                 )
                 .queue();
+    }
+
+    /**
+     * 설정한 서버를 찾는다. 봇이 그 서버에 없으면 원인이 드러나는 메시지로 앱 시작을 멈춘다.
+     * (JDA는 awaitReady 이후라 서버 목록을 이미 받아 둔 상태다)
+     */
+    static Guild requireGuild(JDA jda, String guildId) {
+        String id = guildId == null ? "" : guildId.strip();
+        if (!id.matches("\\d{1,20}")) {
+            throw new IllegalStateException("DISCORD_GUILD_ID가 올바른 서버 ID가 아니에요: '" + id + "'. 서버 ID(숫자)를 넣어 주세요");
+        }
+        Guild guild;
+        try {
+            guild = jda.getGuildById(Long.parseLong(id));
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException("DISCORD_GUILD_ID가 올바른 서버 ID가 아니에요: '" + id + "'. 서버 ID(숫자)를 넣어 주세요", e);
+        }
+        if (guild == null) {
+            throw new IllegalStateException("봇이 서버(ID: " + id + ")에 초대되지 않았어요. 초대 후 다시 시작해 주세요");
+        }
+        return guild;
     }
 }
