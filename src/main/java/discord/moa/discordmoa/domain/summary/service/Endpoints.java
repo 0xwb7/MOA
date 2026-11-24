@@ -16,7 +16,8 @@ import java.util.regex.Pattern;
  *   <li>method는 대문자. HTTP method가 아니거나 형식이 깨진 항목은 버린다 (요약은 실패시키지 않는다)</li>
  *   <li>쿼리스트링·# 이후 제거, 끝의 "/" 제거, 연속 "/" 하나로</li>
  *   <li>"https://host"나 "${BASE_URL}" 같은 앞부분 제거</li>
- *   <li>path 변수는 {이름}으로: ":id" → "{id}", "${userId}" → "{userId}"</li>
+ *   <li>path 변수는 이름과 관계없이 {id}로: "{postId}", ":postId", "${postId}" → "{id}".
+ *       서버와 화면이 변수 이름을 다르게 써도 같은 주소로 비교되게 한다</li>
  *   <li>중복 제거, 저장 상한(JSON 배열 문자열 500자) 안에 들어가는 만큼만</li>
  * </ul>
  */
@@ -31,6 +32,8 @@ public final class Endpoints {
     private static final Pattern LEADING_TEMPLATE = Pattern.compile("^(\\$\\{[^}]*}|\\{\\{[^}]*}})+");
     private static final Pattern TEMPLATE_VARIABLE = Pattern.compile("\\$\\{\\s*([^}]*?)\\s*}");
     private static final Pattern COLON_VARIABLE = Pattern.compile("(?<=/):([A-Za-z_][A-Za-z0-9_]*)");
+    private static final Pattern BRACE_VARIABLE = Pattern.compile("\\{[^}/]*}");
+    private static final String PATH_VARIABLE = "{id}";
     private static final Pattern SLASHES = Pattern.compile("/{2,}");
 
     private Endpoints() {
@@ -71,8 +74,9 @@ public final class Endpoints {
         path = cutAt(cutAt(path, '?'), '#');
         path = SCHEME_AND_HOST.matcher(path).replaceFirst("");
         path = LEADING_TEMPLATE.matcher(path).replaceFirst("");
-        path = TEMPLATE_VARIABLE.matcher(path).replaceAll("{$1}");
-        path = COLON_VARIABLE.matcher(path).replaceAll("{$1}");
+        path = TEMPLATE_VARIABLE.matcher(path).replaceAll(PATH_VARIABLE);
+        path = COLON_VARIABLE.matcher(path).replaceAll(PATH_VARIABLE);
+        path = BRACE_VARIABLE.matcher(path).replaceAll(java.util.regex.Matcher.quoteReplacement(PATH_VARIABLE));
         if (!path.startsWith("/")) {
             path = "/" + path;
         }

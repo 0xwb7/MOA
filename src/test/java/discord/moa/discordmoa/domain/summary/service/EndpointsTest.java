@@ -22,7 +22,7 @@ class EndpointsTest {
             "GET /api/posts#top              | GET /api/posts",
             "GET https://api.moa.dev/api/me  | GET /api/me",
             "POST ${BASE_URL}/api/auth/login | POST /api/auth/login",
-            "GET ${API}/api/users/${userId}  | GET /api/users/{userId}",
+            "GET ${API}/api/users/${userId}  | GET /api/users/{id}",
             "DELETE /api/users/:id           | DELETE /api/users/{id}",
             "GET /api/users/{id}             | GET /api/users/{id}",
             "GET api//posts///               | GET /api/posts",
@@ -30,6 +30,26 @@ class EndpointsTest {
     })
     void 메서드는_대문자로_주소는_path만_남긴다(String raw, String expected) {
         assertThat(Endpoints.normalizeOne(raw)).isEqualTo(expected);
+    }
+
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+            "GET /api/posts/{postId}                         | GET /api/posts/{id}",
+            "GET /api/posts/:postId                          | GET /api/posts/{id}",
+            "GET /api/posts/${postId}                        | GET /api/posts/{id}",
+            "GET /api/posts/${ postId }                      | GET /api/posts/{id}",
+            "GET /api/posts/{id}                             | GET /api/posts/{id}",
+            "GET /api/posts/{postId}/comments/:commentId     | GET /api/posts/{id}/comments/{id}",
+            "PUT ${BASE_URL}/api/users/${user.id}/profile    | PUT /api/users/{id}/profile",
+    })
+    void path_변수는_이름과_관계없이_id로_통일한다(String raw, String expected) {
+        assertThat(Endpoints.normalizeOne(raw)).isEqualTo(expected);
+    }
+
+    @Test
+    void 변수_이름만_다른_주소는_같은_주소로_합쳐진다() {
+        assertThat(Endpoints.normalize(List.of("GET /api/posts/{postId}", "get /api/posts/:id/", "GET /api/posts/${post.id}")))
+                .containsExactly("GET /api/posts/{id}");
     }
 
     @ParameterizedTest

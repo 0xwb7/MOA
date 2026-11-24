@@ -58,7 +58,9 @@ class LlmConfigTest {
                     .doesNotContain("써 볼 수 있는 기능", "써 볼 수는 없다", "직접 써 볼 수 있어요");
             assertThat(context.getBean(SummaryPrompt.class).text())
                     .contains("[주소(endpoints)]", "fetch(`${BASE_URL}/api/auth/login`, { method: 'POST' }) → \"POST /api/auth/login\"",
-                            "로그인 기능의 서버 쪽이 준비됐어요 (화면은 아직이에요)", "\"확인되지 않았어요\"");
+                            "로그인 기능의 서버 쪽이 준비됐어요 (화면은 아직이에요)", "\"확인되지 않았어요\"",
+                            "path 변수 이름은 비교하지 않는다", "path 변수는 이름과 관계없이 {id}로 써",
+                            "@RequestMapping(\"/api/auth\"), 메서드에 @PostMapping(\"/login\") → \"POST /api/auth/login\"");
             assertThat(context.getBean(SummaryPrompt.class).usesPreviousItems()).isTrue();
             assertThat(context.getBean(SummaryPrompt.class).usesEndpoints()).isTrue();
             assertThat(context.getBean(OpenAiClient.class).isConfigured()).isFalse();
