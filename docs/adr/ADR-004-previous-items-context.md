@@ -2,7 +2,7 @@
 
 - 상태: 확정
 - 날짜: 2026-11-23
-- 관련 코드: `PreviousItemsReader`, `SummaryInputBuilder`, `SummarySchema`, `SummaryResponseParser`, `ChangeSummarizer`, `Endpoints`, `StringListJsonConverter`, `resources/prompts/summary-v2.txt`, `summary-v3.txt`, `summary-v4.txt`
+- 관련 코드: `PreviousItemsReader`, `SummaryInputBuilder`, `SummarySchema`, `SummaryResponseParser`, `ChangeSummarizer`, `Endpoints`, `StringListJsonConverter`, `ControllerClassPaths`, `ClassPathExtractor`, `resources/prompts/summary-v2.txt`, `summary-v3.txt`, `summary-v4.txt`
 - 관련 ADR: ADR-003 (정기 발송 준비/발송 분리)
 
 ## 배경
@@ -147,3 +147,17 @@ PM이 가장 알고 싶은 것은 "기능이 완성됐는가(🟢)"다.
   - 되돌리기: v2·v3는 스키마, 입력, 동작이 그대로라 `prompt-version`만 바꾸면 된다.
   - 선택지 C와의 관계: 이 변경은 선택지 C(실제 API 목록)를 가볍게 대신한다. 레포 전체를 읽지 않고, 변경 diff에 나온 주소만 쓴다.
   - 검증: 재현 케이스는 단위 테스트(`SummaryInputBuilderTest`)로 입력 문자열을 확인했다. 실제 LLM으로 테스트 키트 검증은 아직 하지 않았고, 결과가 나오면 "검증 결과" 표에 추가한다.
+  - 보완: 컨트롤러 클래스 경로 (2026-11-25)
+    - 문제: 기존 컨트롤러에 메서드만 추가하면 diff에 클래스 레벨 `@RequestMapping`이 보이지 않는다. 그래서 LLM이 서버 주소를 `POST /signup`으로 보고, 화면의 `POST /api/auth/signup`과 다르다며 🟡를 줬다.
+    - 수집
+      - `.java`/`.kt`이고 patch에 `Mapping(`이 있는 파일은 head 시점 파일을 contents API로 받아 클래스 경로를 뽑고, `FileChange.classPath`에 저장한다.
+      - 배치당 최대 10개 파일이고, 실패하면 그 파일만 경로 없이 진행한다. 파일 내용은 저장하지도 LLM에 보내지도 않는다.
+      - `change_batch.files`가 JSON 컬럼이라 DDL은 바뀌지 않는다.
+    - 입력: 파일 헤더에 `| 클래스 경로: /api/auth`를 붙인다.
+    - 프롬프트
+      - 클래스 경로가 있으면 메서드 경로 앞에 붙여 주소를 만든다.
+      - 앞부분이 빠져 한 주소가 다른 주소의 끝부분과 정확히 같으면, method가 같고 같은 기능일 때 같은 주소로 본다. endpoints에는 긴 쪽을 쓴다.
+    - 감수하는 것
+      - 클래스 경로가 상수(`ApiPaths.AUTH`)나 `${...}` 자리표시자면 뽑지 못한다.
+      - 끝부분 일치 규칙 때문에 서로 다른 기능의 짧은 경로가 같은 주소로 보일 수 있다(예: 두 컨트롤러의 `/login`). 그래서 "같은 기능일 때"라는 조건을 함께 둔다.
+    - 검증: 재현 케이스는 단위 테스트(`SummaryInputBuilderTest`)로 입력 문자열을 확인했다. 실제 LLM 검증은 아직이다.
