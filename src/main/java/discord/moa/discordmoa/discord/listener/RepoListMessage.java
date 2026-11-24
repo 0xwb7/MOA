@@ -29,8 +29,8 @@ final class RepoListMessage {
         for (TrackedRepo repo : list.repos()) {
             text.append("• **").append(MarkdownSanitizer.escape(repo.getFullName())).append("**\n")
                     .append("  등록 ").append(time(repo.getRegisteredAt(), "기록 없음"))
-                    .append(" · 마지막 수집 ").append(time(repo.getLastCollectedAt(), "아직 없음"))
-                    .append(" · 커서 ").append(cursor(repo.getLastProcessedSha())).append('\n');
+                    .append(" · 마지막 수집 ").append(lastCollected(repo.getLastCollectedAt(), repo.getLastProcessedSha()))
+                    .append('\n');
         }
         return text.toString();
     }
@@ -39,10 +39,19 @@ final class RepoListMessage {
         return instant == null ? missing : TIME.format(instant);
     }
 
-    private static String cursor(String sha) {
-        if (sha == null) {
-            return "없음 (첫 커밋부터 수집)";
+    /**
+     * 수집한 적 있음: "11/23 20:30 (`abcdef1`까지)", 없음: "없음 (`abcdef1`부터 시작)".
+     * 커서가 없으면 수집 전은 "없음 (첫 커밋부터 시작)", 수집 후(빈 레포)는 시각만.
+     */
+    private static String lastCollected(Instant collectedAt, String sha) {
+        if (collectedAt == null) {
+            return "없음 (" + (sha == null ? "첫 커밋" : shortSha(sha)) + "부터 시작)";
         }
+        String time = TIME.format(collectedAt);
+        return sha == null ? time : time + " (" + shortSha(sha) + "까지)";
+    }
+
+    private static String shortSha(String sha) {
         return "`" + sha.substring(0, Math.min(SHORT_SHA, sha.length())) + "`";
     }
 }

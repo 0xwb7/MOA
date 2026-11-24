@@ -17,7 +17,7 @@ class RepoListMessageTest {
     private final Team team = new Team("1팀", 100L, 7L);
 
     @Test
-    void 레포마다_등록일_마지막_수집_시각_커서_앞_7자리를_보여준다() {
+    void 레포마다_등록일과_마지막_수집_시각_뒤에_어디까지_수집했는지_보여준다() {
         TrackedRepo repo = new TrackedRepo(team, 1L, "team1/my_backend", "main", "abcdef1234567890abcdef1234567890abcdef12",
                 555L, Instant.parse("2026-11-23T00:00:00Z"));
         ReflectionTestUtils.setField(repo, "lastCollectedAt", Instant.parse("2026-11-23T11:30:00Z"));
@@ -26,16 +26,34 @@ class RepoListMessageTest {
 
         assertThat(text).contains("'1팀' 레포 목록 (1개)")
                 .contains("**team1/my_backend**")
-                .contains("등록 11/23 09:00 · 마지막 수집 11/23 20:30 · 커서 `abcdef1`")
-                .doesNotContain("abcdef12");
+                .contains("등록 11/23 09:00 · 마지막 수집 11/23 20:30 (`abcdef1`까지)\n")
+                .doesNotContain("abcdef12")
+                .doesNotContain("커서");
     }
 
     @Test
-    void 기록이_없는_값은_없음으로_보여준다() {
+    void 수집한_적이_없으면_어디부터_시작하는지_보여준다() {
+        TrackedRepo repo = new TrackedRepo(team, 1L, "team1/app", "main", "abcdef1234567890abcdef1234567890abcdef12", 555L);
+
+        assertThat(RepoListMessage.format(new TrackedRepoService.RepoList("1팀", List.of(repo))))
+                .contains("등록 기록 없음 · 마지막 수집 없음 (`abcdef1`부터 시작)\n");
+    }
+
+    @Test
+    void 수집한_적도_커서도_없으면_첫_커밋부터_시작한다고_보여준다() {
         TrackedRepo repo = new TrackedRepo(team, 1L, "team1/app", "main", null, 555L);
 
         assertThat(RepoListMessage.format(new TrackedRepoService.RepoList("1팀", List.of(repo))))
-                .contains("등록 기록 없음 · 마지막 수집 아직 없음 · 커서 없음 (첫 커밋부터 수집)");
+                .contains("등록 기록 없음 · 마지막 수집 없음 (첫 커밋부터 시작)\n");
+    }
+
+    @Test
+    void 수집했지만_커서가_없으면_시각만_보여준다() {
+        TrackedRepo repo = new TrackedRepo(team, 1L, "team1/app", "main", null, 555L);
+        ReflectionTestUtils.setField(repo, "lastCollectedAt", Instant.parse("2026-11-23T11:30:00Z"));
+
+        assertThat(RepoListMessage.format(new TrackedRepoService.RepoList("1팀", List.of(repo))))
+                .contains("마지막 수집 11/23 20:30\n");
     }
 
     @Test
