@@ -19,6 +19,7 @@ import java.util.List;
  * 조건: 발송된(SENT) LLM 회차의 READY·PARTIAL 항목, 최근 lookback-days 이내, 최신 max-items개.
  * FALLBACK(커밋 목록)·NO_CHANGE·INTERNAL은 기능 정보가 아니라서 넣지 않는다.
  * 같은 팀의 발송된 항목이 이미 이어받은(relatedPreviousItemId) 항목도 넣지 않는다. 이어받은 항목이 대신 목록에 남는다.
+ * 제목만 자르고 API 주소(endpoints)는 그대로 둔다 (입력 줄에 "| 주소: …"로 따로 붙는다).
  */
 @Component
 public class PreviousItemsReader {
@@ -48,7 +49,7 @@ public class PreviousItemsReader {
         digestItemRepository.findPreviousItems(teamId, DigestStatus.SENT, DigestType.LLM, FEATURE_STATUSES, since,
                         PageRequest.of(0, settings.maxItems()))
                 .forEach(row -> newestFirst.add(new PreviousItem(row.id(), row.scheduledFor(),
-                        SummaryStatus.valueOf(row.itemStatus()), oneLine(row.title()))));
+                        SummaryStatus.valueOf(row.itemStatus()), oneLine(row.title()), row.endpoints())));
         Collections.reverse(newestFirst);
         return newestFirst;
     }

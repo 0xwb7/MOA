@@ -37,7 +37,7 @@ public interface DigestItemRepository extends JpaRepository<DigestItem, Long> {
      * 이어받은 회차가 발송 실패했거나 아직 안 보냈으면 PM이 이어진 결과를 못 봤으니 남긴다.
      */
     @Query("""
-            select new discord.moa.discordmoa.domain.digest.repository.PreviousItemRow(i.id, d.scheduledFor, i.itemStatus, i.title)
+            select new discord.moa.discordmoa.domain.digest.repository.PreviousItemRow(i.id, d.scheduledFor, i.itemStatus, i.title, i.endpoints)
             from DigestItem i join i.digest d
             where d.team.id = :teamId
               and d.status = :sent

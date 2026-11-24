@@ -45,9 +45,13 @@ final class SummaryPreviewMessage {
         String line = item.status().emoji() + " " + MarkdownSanitizer.escape(item.title())
                 + " (커밋 " + item.commitShas().size() + "개)";
         // 운영진 확인용. PM에게 가는 실제 메시지에는 넣지 않는다
-        return item.relatedPreviousItemId() == null
-                ? line
-                : line + "\n   ↗ 이전 항목 #" + item.relatedPreviousItemId() + "에서 이어짐";
+        if (item.relatedPreviousItemId() != null) {
+            line += "\n   ↗ 이전 항목 #" + item.relatedPreviousItemId() + "에서 이어짐";
+        }
+        if (!item.endpoints().isEmpty()) {
+            line += "\n   주소: " + MarkdownSanitizer.escape(String.join(", ", item.endpoints()));
+        }
+        return line;
     }
 
     private static String stats(SummaryStats stats) {

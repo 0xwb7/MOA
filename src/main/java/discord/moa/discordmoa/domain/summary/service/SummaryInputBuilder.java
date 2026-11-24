@@ -32,6 +32,7 @@ public class SummaryInputBuilder {
     private static final String OMITTED_NO_PATCH = "[diff 없음]";
     private static final String OMITTED_SIZE = "[diff 생략: 입력 크기 제한]";
     static final String PREVIOUS_HEADER = "## 이전에 PM에게 이미 보고한 기능 (참고용. 이번 변경 아님)\n";
+    static final String PREVIOUS_ENDPOINTS = " | 주소: ";
 
     private final AntPathMatcher matcher = new AntPathMatcher();
     private final int maxInputChars;
@@ -110,7 +111,12 @@ public class SummaryInputBuilder {
             text.append("- [P").append(item.id()).append("] ")
                     .append(previousTime.format(item.scheduledFor())).append(' ')
                     .append(item.status().emoji()).append(' ')
-                    .append(item.title()).append('\n');
+                    .append(item.title());
+            // 주소는 제목과 따로 붙여서 제목이 잘려도 남는다. 주소가 없으면 기존 형식 그대로
+            if (!item.endpoints().isEmpty()) {
+                text.append(PREVIOUS_ENDPOINTS).append(String.join(", ", item.endpoints()));
+            }
+            text.append('\n');
         }
         return text.append('\n').toString();
     }

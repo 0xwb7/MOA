@@ -41,7 +41,7 @@ class LlmConfigTest {
             assertThat(openAi.baseUrl()).isEqualTo("https://api.openai.com/v1");
 
             SummaryProperties summary = context.getBean(SummaryProperties.class);
-            assertThat(summary.promptVersion()).isEqualTo("v3");
+            assertThat(summary.promptVersion()).isEqualTo("v4");
             assertThat(summary.previousItems()).isEqualTo(new SummaryProperties.PreviousItems(14, 30));
             assertThat(summary.maxInputChars()).isEqualTo(60_000);
             assertThat(summary.zone()).isEqualTo(ZoneId.of("Asia/Seoul"));
@@ -56,7 +56,11 @@ class LlmConfigTest {
                     .contains("화면(프론트엔드)과 서버(백엔드)가 연결돼 기능이 완성된 것")
                     .contains("\"바로 써 보세요\", \"사용해 보세요\"")
                     .doesNotContain("써 볼 수 있는 기능", "써 볼 수는 없다", "직접 써 볼 수 있어요");
+            assertThat(context.getBean(SummaryPrompt.class).text())
+                    .contains("[주소(endpoints)]", "fetch(`${BASE_URL}/api/auth/login`, { method: 'POST' }) → \"POST /api/auth/login\"",
+                            "로그인 기능의 서버 쪽이 준비됐어요 (화면은 아직이에요)", "\"확인되지 않았어요\"");
             assertThat(context.getBean(SummaryPrompt.class).usesPreviousItems()).isTrue();
+            assertThat(context.getBean(SummaryPrompt.class).usesEndpoints()).isTrue();
             assertThat(context.getBean(OpenAiClient.class).isConfigured()).isFalse();
         });
     }

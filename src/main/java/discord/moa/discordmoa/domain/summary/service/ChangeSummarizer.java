@@ -107,6 +107,10 @@ public class ChangeSummarizer {
 
         // v2부터: 이전 회차에 보고한 기능을 참고로 넣어, 서버·화면이 다른 회차에 나뉘어 완성된 기능도 READY로 판단하게 한다
         List<PreviousItem> previousItems = prompt.usesPreviousItems() ? previousItemsReader.read(teamId) : List.of();
+        if (!prompt.usesEndpoints()) {
+            // v2·v3 입력은 주소 없이 기존 형식 그대로 (버전별 결과 비교가 섞이지 않게)
+            previousItems = previousItems.stream().map(PreviousItem::withoutEndpoints).toList();
+        }
         SummaryInput input = inputBuilder.build(batches, previousItems);
         attempts.inputChars = input.text().length();
         if (input.droppedPatchCount() > 0 || input.messagesShortened() || input.droppedPreviousCount() > 0) {
@@ -190,7 +194,7 @@ public class ChangeSummarizer {
                 effort == null || effort.isBlank() ? null : new OpenAiRequest.Reasoning(effort),
                 openAiProperties.maxOutputTokens(),
                 new OpenAiRequest.Text(OpenAiRequest.Format.jsonSchema(SummarySchema.NAME,
-                        SummarySchema.schema(prompt.usesPreviousItems()))),
+                        SummarySchema.schema(prompt.usesPreviousItems(), prompt.usesEndpoints()))),
                 false
         );
     }

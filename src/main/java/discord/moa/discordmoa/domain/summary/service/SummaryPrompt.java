@@ -48,4 +48,19 @@ public class SummaryPrompt {
     public boolean usesPreviousItems() {
         return !"v1".equals(version);
     }
+
+    /**
+     * v4부터 항목마다 API 주소(endpoints)를 받아 저장하고, 이전 항목 줄에 "| 주소: …"를 붙인다.
+     * 서버 주소와 화면이 호출하는 주소가 같은지로 READY를 판단하게 하기 위함이다. v2·v3는 기존 동작 그대로.
+     */
+    public boolean usesEndpoints() {
+        return versionNumber() >= 4;
+    }
+
+    private int versionNumber() {
+        if (version == null || !version.matches("v\\d+")) {
+            return 0;
+        }
+        return Integer.parseInt(version.substring(1));
+    }
 }

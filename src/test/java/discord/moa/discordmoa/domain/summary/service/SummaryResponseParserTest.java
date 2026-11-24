@@ -176,4 +176,20 @@ class SummaryResponseParserTest {
                 .isInstanceOf(SummaryValidationException.class)
                 .hasMessageContaining(messagePart);
     }
+
+    @Test
+    void endpoints를_읽어_정규화하고_INTERNAL과_필드가_없는_응답은_빈_목록이다() {
+        String output = """
+                {"items":[
+                  {"status":"PARTIAL","title":"로그인 서버","commitShas":["%s"],"relatedPreviousItemId":null,
+                   "endpoints":["post /api/auth/login/","POST /api/auth/login","잘못된 값"]},
+                  {"status":"PARTIAL","title":"게시판 화면","commitShas":["%s"]},
+                  {"status":"INTERNAL","title":"정리","commitShas":["%s"],"relatedPreviousItemId":null,"endpoints":["GET /x"]}
+                ]}""".formatted(sha('a'), sha('b'), sha('a'));
+
+        List<SummaryItem> items = parser.parseItems(output, Set.of(sha('a'), sha('b')), Set.of());
+
+        assertThat(items).extracting(SummaryItem::endpoints).containsExactly(
+                List.of("POST /api/auth/login"), List.of(), List.of());
+    }
 }

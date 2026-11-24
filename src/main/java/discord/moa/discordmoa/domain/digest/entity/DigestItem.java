@@ -1,8 +1,11 @@
 package discord.moa.discordmoa.domain.digest.entity;
 
+import discord.moa.discordmoa.domain.summary.service.Endpoints;
 import discord.moa.discordmoa.domain.summary.service.SummaryStatus;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
+import discord.moa.discordmoa.global.jpa.StringListJsonConverter;
 import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
@@ -63,6 +66,12 @@ public class DigestItem {
     // 이 항목이 상태를 올리거나 이어받은 이전 항목(DigestItem ID). 지표용이라 외래키는 걸지 않는다
     private Long relatedPreviousItemId;
 
+    // LLM 항목의 API 주소("METHOD /path") JSON 배열 문자열. 프롬프트 v4부터 채운다 (그 전 행·FALLBACK·주소 없음은 null).
+    // 다음 회차 "이전에 보고한 기능" 줄에 붙여, 화면이 호출하는 주소와 이전 서버 주소를 비교하게 한다
+    @Convert(converter = StringListJsonConverter.class)
+    @Column(length = Endpoints.MAX_STORED_LENGTH)
+    private List<String> endpoints;
+
     public DigestItem(Digest digest, TrackedRepo trackedRepo, String text, List<String> commitShas) {
         this.digest = digest;
         this.trackedRepo = trackedRepo;
@@ -75,10 +84,23 @@ public class DigestItem {
      */
     public DigestItem(Digest digest, TrackedRepo trackedRepo, String text, List<String> commitShas,
                       SummaryStatus itemStatus, String title, Long relatedPreviousItemId) {
+        this(digest, trackedRepo, text, commitShas, itemStatus, title, relatedPreviousItemId, List.of());
+    }
+
+    /**
+     * LLM 요약 항목 (프롬프트 v4부터 API 주소 포함). 주소는 Endpoints.normalize를 거친 값이어야 한다.
+     */
+    public DigestItem(Digest digest, TrackedRepo trackedRepo, String text, List<String> commitShas,
+                      SummaryStatus itemStatus, String title, Long relatedPreviousItemId, List<String> endpoints) {
         this(digest, trackedRepo, text, commitShas);
         this.itemStatus = itemStatus.name();
         this.title = title;
         this.relatedPreviousItemId = relatedPreviousItemId;
+        this.endpoints = endpoints == null || endpoints.isEmpty() ? null : List.copyOf(endpoints);
+    }
+
+    public List<String> getEndpoints() {
+        return endpoints == null ? List.of() : endpoints;
     }
 
     public SummaryStatus getItemStatus() {

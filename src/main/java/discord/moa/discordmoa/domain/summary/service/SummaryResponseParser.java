@@ -111,7 +111,9 @@ public class SummaryResponseParser {
                 internalTitles.add(title);
                 internalShas.addAll(shas);
             } else {
-                features.add(new SummaryItem(status, title, shas, relatedPreviousItemId(item, knownPreviousIds)));
+                // endpoints는 형식이 깨져도 요약을 실패시키지 않고 그 주소만 버린다 (프롬프트 v4 이전 응답에는 없음)
+                features.add(new SummaryItem(status, title, shas, relatedPreviousItemId(item, knownPreviousIds),
+                        Endpoints.normalize(item.endpoints())));
             }
         }
 
@@ -185,6 +187,7 @@ public class SummaryResponseParser {
     record RawSummary(List<RawItem> items) {
     }
 
-    record RawItem(String status, String title, List<String> commitShas, Long relatedPreviousItemId) {
+    record RawItem(String status, String title, List<String> commitShas, Long relatedPreviousItemId,
+                   List<String> endpoints) {
     }
 }

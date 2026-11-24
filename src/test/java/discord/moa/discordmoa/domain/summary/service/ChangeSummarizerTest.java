@@ -182,6 +182,53 @@ class ChangeSummarizerTest {
         assertThat(result.stats().promptVersion()).isEqualTo("v2");
     }
 
+    // ---- 프롬프트 v4: API 주소 ----
+
+    @Test
+    void v4는_스키마에_endpoints를_두고_이전_항목에_주소를_붙이고_응답_주소를_정규화한다() {
+        given(previousItemsReader.read(TEAM_ID)).willReturn(List.of(new PreviousItem(12L,
+                Instant.parse("2026-11-19T12:00:00Z"), SummaryStatus.PARTIAL, "로그인 기능의 서버 쪽 준비",
+                List.of("POST /api/auth/login"))));
+        given(openAiClient.createResponse(any())).willReturn(response("""
+                {"items":[{"status":"READY","title":"로그인 기능이 완성됐어요","commitShas":["%s"],
+                "relatedPreviousItemId":12,"endpoints":["post /api/auth/login/","POST ${BASE_URL}/api/auth/login"]}]}"""
+                .formatted(sha('b'))));
+
+        SummaryResult result = summarizer(properties("v4", 60_000, 40, 1_000_000)).summarize(TEAM_ID, LlmCallPurpose.DIGEST);
+
+        assertThat(result.items()).singleElement().satisfies(item -> {
+            assertThat(item.relatedPreviousItemId()).isEqualTo(12L);
+            assertThat(item.endpoints()).containsExactly("POST /api/auth/login");
+        });
+        OpenAiRequest request = capturedRequest();
+        assertThat(request.input()).startsWith("## 이전에 PM에게 이미 보고한 기능 (참고용. 이번 변경 아님)\n"
+                + "- [P12] 11-19 21:00 🟡 로그인 기능의 서버 쪽 준비 | 주소: POST /api/auth/login\n");
+        assertThat(request.instructions()).contains("[주소(endpoints)]", "${BASE_URL}/api/auth/login");
+        assertThat(JSON.writeValueAsString(request)).contains(
+                "\"required\":[\"status\",\"title\",\"commitShas\",\"relatedPreviousItemId\",\"endpoints\"]");
+        assertThat(SummarySchema.schema(true, true)).extractingByKey("properties").satisfies(root ->
+                assertThat(((Map<?, ?>) root).get("items").toString())
+                        .contains("endpoints={", "type=array", "items={type=string}"));
+        assertThat(result.stats().promptVersion()).isEqualTo("v4");
+    }
+
+    @Test
+    void v3는_스키마와_이전_항목_줄에_주소를_넣지_않는다() {
+        given(previousItemsReader.read(TEAM_ID)).willReturn(List.of(new PreviousItem(12L,
+                Instant.parse("2026-11-19T12:00:00Z"), SummaryStatus.PARTIAL, "로그인 기능의 서버 쪽 준비",
+                List.of("POST /api/auth/login"))));
+        given(openAiClient.createResponse(any())).willReturn(response("""
+                {"items":[{"status":"PARTIAL","title":"로그인 화면","commitShas":["%s"],"relatedPreviousItemId":null}]}"""
+                .formatted(sha('b'))));
+
+        SummaryResult result = summarizer(properties("v3", 60_000, 40, 1_000_000)).summarize(TEAM_ID, LlmCallPurpose.DIGEST);
+
+        assertThat(result.items().getFirst().endpoints()).isEmpty();
+        OpenAiRequest request = capturedRequest();
+        assertThat(request.input()).contains("- [P12] 11-19 21:00 🟡 로그인 기능의 서버 쪽 준비\n").doesNotContain("주소:");
+        assertThat(JSON.writeValueAsString(request)).doesNotContain("endpoints");
+    }
+
     @Test
     void v2에서_응답의_이전_항목_ID가_입력에_없으면_그_값만_버리고_요약은_성공한다() {
         given(previousItemsReader.read(TEAM_ID)).willReturn(List.of(new PreviousItem(12L,

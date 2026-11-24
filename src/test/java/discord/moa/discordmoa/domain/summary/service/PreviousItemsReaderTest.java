@@ -49,6 +49,8 @@ class PreviousItemsReaderTest {
     private DigestItemRepository digestItemRepository;
     @Autowired
     private EntityManagerFactory entityManagerFactory;
+    @Autowired
+    private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     private final MutableClock clock = new MutableClock(NOW, SummaryFixtures.SEOUL);
     private Team team;
@@ -195,6 +197,23 @@ class PreviousItemsReaderTest {
             default -> ReflectionTestUtils.setField(digest, "status", status);
         }
         return digestRepository.save(digest);
+    }
+
+    @Test
+    void 저장된_API_주소를_함께_읽고_주소가_없는_예전_행은_빈_목록이다() {
+        Digest sent = digest(team, hoursAgo(24), DigestType.LLM, DigestStatus.SENT);
+        DigestItem server = digestItemRepository.save(new DigestItem(sent, repo, "🟡 로그인 서버", List.of("a"),
+                SummaryStatus.PARTIAL, "로그인 기능의 서버 쪽 준비", null, List.of("POST /api/auth/login")));
+        DigestItem legacy = item(sent, repo, SummaryStatus.PARTIAL, "주소 저장 전 항목");
+
+        List<PreviousItem> items = reader(SummaryProperties.PreviousItems.DEFAULT).read(team.getId());
+
+        assertThat(items).extracting(PreviousItem::id).containsExactly(server.getId(), legacy.getId());
+        assertThat(items).extracting(PreviousItem::endpoints)
+                .containsExactly(List.of("POST /api/auth/login"), List.of());
+        Long rawNull = jdbc.queryForObject(
+                "select count(*) from digest_item where id = ? and endpoints is null", Long.class, legacy.getId());
+        assertThat(rawNull).isEqualTo(1L);   // 주소가 없으면 컬럼은 null (빈 배열 문자열이 아님)
     }
 
     private DigestItem item(Digest digest, TrackedRepo itemRepo, SummaryStatus status, String title) {

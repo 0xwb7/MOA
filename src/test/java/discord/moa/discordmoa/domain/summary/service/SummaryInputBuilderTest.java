@@ -209,6 +209,56 @@ class SummaryInputBuilderTest {
         assertThat(input.droppedPreviousCount()).isZero();
     }
 
+    // ---- 이전 항목의 API 주소 (v4) ----
+
+    @Test
+    void 재현_이전_서버_항목의_주소와_이번_화면이_호출하는_주소를_한_입력에_넣는다() {
+        // 이전: BE에 POST /api/auth/login 추가 → 🟡. 이번: FE LoginPage가 ${BASE_URL}/api/auth/login 호출
+        PreviousItem serverSide = new PreviousItem(12L, Instant.parse("2026-11-23T12:00:00Z"), SummaryStatus.PARTIAL,
+                "로그인 기능의 서버 쪽 준비", List.of("POST /api/auth/login"));
+        ChangeBatch loginPage = batch(1L, frontend, List.of(commit(sha('a'), "feat: 로그인 화면 추가")), List.of(
+                file("src/pages/LoginPage.tsx",
+                        "+  const res = await fetch(`${BASE_URL}/api/auth/login`, { method: 'POST', body });")));
+
+        SummaryInput input = builder(NO_LIMIT).build(List.of(loginPage), List.of(serverSide));
+
+        assertThat(input.text()).startsWith("""
+                ## 이전에 PM에게 이미 보고한 기능 (참고용. 이번 변경 아님)
+                - [P12] 11-23 21:00 🟡 로그인 기능의 서버 쪽 준비 | 주소: POST /api/auth/login
+
+                # 레포: team1/frontend
+                """)
+                .contains("src/pages/LoginPage.tsx")
+                .contains("fetch(`${BASE_URL}/api/auth/login`, { method: 'POST', body })");
+        assertThat(input.knownPreviousIds()).containsExactly(12L);
+    }
+
+    @Test
+    void 주소가_여러_개면_쉼표로_잇고_없으면_기존_형식_그대로다() {
+        PreviousItem withTwo = new PreviousItem(12L, Instant.parse("2026-11-23T00:00:00Z"), SummaryStatus.PARTIAL,
+                "회원 정보 서버 준비", List.of("GET /api/users/{id}", "PATCH /api/users/{id}"));
+        List<ChangeBatch> batches = List.of(batch(1L, frontend, List.of(commit(sha('a'), "화면")), List.of()));
+
+        assertThat(builder(NO_LIMIT).build(batches, List.of(withTwo, P15)).text()).startsWith("""
+                ## 이전에 PM에게 이미 보고한 기능 (참고용. 이번 변경 아님)
+                - [P12] 11-23 09:00 🟡 회원 정보 서버 준비 | 주소: GET /api/users/{id}, PATCH /api/users/{id}
+                - [P15] 11-23 21:00 🟢 회원가입 기능이 완성됐어요
+                """);
+    }
+
+    @Test
+    void 제목이_길어_잘려도_주소는_남는다() {
+        String longTitle = PreviousItemsReader.oneLine("로그인 ".repeat(100));
+        PreviousItem item = new PreviousItem(12L, Instant.parse("2026-11-23T00:00:00Z"), SummaryStatus.PARTIAL,
+                longTitle, List.of("POST /api/auth/login"));
+        List<ChangeBatch> batches = List.of(batch(1L, frontend, List.of(commit(sha('a'), "화면")), List.of()));
+
+        String line = builder(NO_LIMIT).build(batches, List.of(item)).text().lines().skip(1).findFirst().orElseThrow();
+
+        assertThat(longTitle).endsWith("…");
+        assertThat(line).endsWith("… | 주소: POST /api/auth/login");
+    }
+
     @Test
     void 이전_항목이_없으면_섹션을_넣지_않는다() {
         List<ChangeBatch> batches = List.of(batch(1L, frontend, List.of(commit(sha('a'), "로그인 화면")), List.of()));

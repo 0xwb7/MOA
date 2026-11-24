@@ -601,10 +601,11 @@ class DigestCycleTest {
     // ---- 이전에 보고한 항목 (v2) ----
 
     @Test
-    void LLM_항목은_상태_제목_이전_항목_ID를_함께_저장한다() {
+    void LLM_항목은_상태_제목_이전_항목_ID_API_주소를_함께_저장한다() {
         ChangeBatch login = collected(frontend, "로그인 화면");
         given(changeSummarizer.summarize(anyLong(), any())).willAnswer(inv -> SummaryResult.success(collectedIds(), List.of(
-                new SummaryItem(SummaryStatus.READY, "로그인 기능이 완성됐어요", List.of(sha(login)), 77L),
+                new SummaryItem(SummaryStatus.READY, "로그인 기능이 완성됐어요", List.of(sha(login)), 77L,
+                        List.of("POST /api/auth/login")),
                 new SummaryItem(SummaryStatus.INTERNAL, "코드 정리", List.of(sha(login)))), null));
 
         preparer.prepareCycle(CYCLE);
@@ -613,6 +614,7 @@ class DigestCycleTest {
         assertThat(saved).extracting(DigestItem::getItemStatus).containsExactly(SummaryStatus.READY, SummaryStatus.INTERNAL);
         assertThat(saved).extracting(DigestItem::getTitle).containsExactly("로그인 기능이 완성됐어요", "코드 정리");
         assertThat(saved).extracting(DigestItem::getRelatedPreviousItemId).containsExactly(77L, null);
+        assertThat(saved).extracting(DigestItem::getEndpoints).containsExactly(List.of("POST /api/auth/login"), List.of());
         assertThat(saved.getFirst().getText()).isEqualTo("🟢 로그인 기능이 완성됐어요");   // PM 메시지에는 이전 항목 표시 없음
     }
 

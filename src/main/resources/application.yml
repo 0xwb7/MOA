@@ -38,7 +38,7 @@ openai:
   max-output-tokens: 8000
 
 summary:
-  prompt-version: v3   # v1: 이번 회차 변경만 / v2: 이전에 보고한 기능도 참고로 넣음 (ADR-004) / v3: v2 + 🟢를 '기능 완성'으로, 사용 가능 단정 금지
+  prompt-version: v4   # v1: 이번 회차 변경만 / v2: 이전에 보고한 기능도 참고로 넣음 (ADR-004) / v3: v2 + 🟢를 '기능 완성'으로, 사용 가능 단정 금지 / v4: v3 + 항목별 API 주소로 서버·화면 연결 판단
   max-input-chars: 60000
   # 일일 상한은 용도별로 따로 센다 (재시도 포함). 정기 발송은 하루 12회 × 최대 3번 시도 = 36회
   daily-max-calls:
