@@ -2,7 +2,7 @@
 
 - 상태: 확정
 - 날짜: 2026-11-23
-- 관련 코드: `PreviousItemsReader`, `SummaryInputBuilder`, `SummarySchema`, `SummaryResponseParser`, `ChangeSummarizer`, `resources/prompts/summary-v2.txt`, `summary-v3.txt`
+- 관련 코드: `PreviousItemsReader`, `SummaryInputBuilder`, `SummarySchema`, `SummaryResponseParser`, `ChangeSummarizer`, `Endpoints`, `StringListJsonConverter`, `resources/prompts/summary-v2.txt`, `summary-v3.txt`, `summary-v4.txt`
 - 관련 ADR: ADR-003 (정기 발송 준비/발송 분리)
 
 ## 배경
@@ -132,3 +132,18 @@ PM이 가장 알고 싶은 것은 "기능이 완성됐는가(🟢)"다.
   - 프롬프트에 사용할 수 있다고 단정하는 표현("바로 써 보세요", "사용해 보세요" 등)을 쓰지 말라는 규칙을 더했다.
   - 🟢/🟡/⚪ 판정 기준과 이전 항목 규칙은 v2와 같다.
   - v2 파일은 그대로 남겨, LlmCall 기록으로 버전별 결과를 비교할 수 있게 했다.
+- **2026-11-25, 프롬프트 v4 (API 주소로 서버·화면 연결 판단)**
+  - 문제: 이전 항목 목록에 제목만 있어서, LLM이 이번 화면 코드가 호출하는 주소와 이전 서버 기능을 비교할 근거가 없었다.
+    - 예) 이전 "🟡 로그인 기능의 서버 쪽 준비"(BE에 `POST /api/auth/login` 추가)가 있는데, `/api/auth/login`을 호출하는 FE `LoginPage`가 🟡로 나왔다.
+  - 변경
+    - 응답 스키마의 각 항목에 `endpoints`("METHOD /path" 배열, 없으면 빈 배열)를 받는다. 서버 쪽은 만들거나 구현한 주소, 화면 쪽은 호출하는 주소다.
+    - 코드에서 정규화한다: method는 대문자, 쿼리스트링·끝의 `/`·base URL·`${...}` 접두사는 빼고, path 변수는 `{이름}`으로 쓰고, 중복은 지운다.
+    - `DigestItem.endpoints`(varchar(500), JSON 배열 문자열, nullable)에 저장한다. 새 컬럼이라 기존 행은 null이다.
+    - 이전 항목 줄에 `| 주소: POST /api/auth/login`을 붙인다. 제목이 잘려도 주소는 남는다.
+    - 규칙 3: 같은 회차라도 화면이 그 서버 주소를 실제로 호출할 때만 READY로 쓴다.
+    - 이전 항목 규칙 2: 이전 항목의 주소와 이번 변경의 주소가 같을 때만 이어받는다(method와 path가 같고, base URL과 환경변수 접두사는 무시).
+    - PARTIAL은 "무엇이 됐고 무엇이 아직인지"로 쓴다. "확인되지 않았어요"처럼 MOA가 판단하지 못한 것으로 읽히는 표현은 금지한다.
+  - 감수하는 것: v4 이전에 저장된 항목에는 주소가 없어서 이어받지 않는다. lookback(14일)이 지나면 저절로 해소된다.
+  - 되돌리기: v2·v3는 스키마, 입력, 동작이 그대로라 `prompt-version`만 바꾸면 된다.
+  - 선택지 C와의 관계: 이 변경은 선택지 C(실제 API 목록)를 가볍게 대신한다. 레포 전체를 읽지 않고, 변경 diff에 나온 주소만 쓴다.
+  - 검증: 재현 케이스는 단위 테스트(`SummaryInputBuilderTest`)로 입력 문자열을 확인했다. 실제 LLM으로 테스트 키트 검증은 아직 하지 않았고, 결과가 나오면 "검증 결과" 표에 추가한다.
