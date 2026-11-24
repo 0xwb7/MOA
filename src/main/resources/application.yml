@@ -1,10 +1,10 @@
 discord:
   token: ${DISCORD_BOT_TOKEN}
-  guild-id: ${DISCORD_GUILD_ID}
-  confirm-button-enabled: ${DISCORD_CONFIRM_BUTTON_ENABLED:true}
-  ask-button-enabled: ${DISCORD_ASK_BUTTON_ENABLED:true}
-  ops-channel-id: ${DISCORD_OPS_CHANNEL_ID:}
-  ops-role-id: ${DISCORD_OPS_ROLE_ID:}
+  guild-id: ${DISCORD_GUILD_ID}   # 봇이 명령어를 등록하고 동작할 Discord 서버(그로우톤 서버) ID
+  confirm-button-enabled: ${DISCORD_CONFIRM_BUTTON_ENABLED:false}   # 발송 항목에 "확인했어요" 버튼을 붙일지
+  ask-button-enabled: ${DISCORD_ASK_BUTTON_ENABLED:false}           # 발송 항목에 "개발자에게 질문하기" 버튼을 붙일지
+  ops-channel-id: ${DISCORD_OPS_CHANNEL_ID:}   # 운영진 장애 알림 채널. 비우면 서버 로그로만 남김
+  ops-role-id: ${DISCORD_OPS_ROLE_ID:}         # 선택. 🔴 실패 알림에서만 이 역할을 멘션
 
 spring:
   datasource:
@@ -14,7 +14,7 @@ spring:
   task:
     scheduling:
       pool:
-        size: 2
+        size: 2   # cron 트리거 전용. 준비·발송은 SchedulingConfig의 별도 실행기에서 돈다
   jpa:
     hibernate:
       ddl-auto: update
@@ -38,8 +38,9 @@ openai:
   max-output-tokens: 8000
 
 summary:
-  prompt-version: v4
+  prompt-version: v4   # v1: 이번 회차 변경만 / v2: 이전에 보고한 기능도 참고로 넣음 (ADR-004) / v3: v2 + 🟢를 '기능 완성'으로, 사용 가능 단정 금지 / v4: v3 + 항목별 API 주소로 서버·화면 연결 판단
   max-input-chars: 60000
+  # 일일 상한은 용도별로 따로 센다 (재시도 포함). 정기 발송은 하루 12회 × 최대 3번 시도 = 36회
   daily-max-calls:
     digest: 60
     preview: 30
@@ -47,7 +48,7 @@ summary:
     digest: 1500000
     preview: 500000
   zone: Asia/Seoul
-  previous-items:
+  previous-items:            # v2: 이전 회차에 PM에게 보고한 기능(READY·PARTIAL)을 LLM 입력에 참고로 넣는 범위
     lookback-days: 14
     max-items: 30
   excluded-files:
@@ -82,9 +83,9 @@ summary:
 
 schedule:
   zone: Asia/Seoul
-  prepare-cron: "0 30 8,20 * * *"
-  send-cron: "0 0 9,21 * * *"
-  prepare-deadline-before: 2m
-  prepare-concurrency: 3
-  send-lock-wait: 30s
-  recovery-window: 30m
+  prepare-cron: "0 30 8,20 * * *"   # 수집 + 요약 + READY 저장
+  send-cron: "0 0 9,21 * * *"       # 저장된 것을 발송 (회차 = 이 시각)
+  prepare-deadline-before: 2m       # 08:58까지 요약이 안 끝나면 변경 목록으로 READY
+  prepare-concurrency: 3            # 동시에 준비할 최대 팀 수
+  send-lock-wait: 30s               # 발송 단계가 팀 락을 기다리는 최대 시간 (지나면 락 없이 진행)
+  recovery-window: 30m              # 재시작 후 이 시간 안이면 늦게라도 발송
