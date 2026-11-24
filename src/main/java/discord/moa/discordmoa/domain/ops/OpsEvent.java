@@ -41,6 +41,8 @@ public record OpsEvent(
         RECOVERY_LATE_SEND("재시작 복구: 늦은 발송", Severity.WARNING),
         RECOVERY_ABANDONED("재시작 복구: 발송 포기", Severity.FAILURE),
         REPO_DEACTIVATED("레포 해제", Severity.INFO),
+        QUESTION_FAILED("개발자 질문 처리 실패", Severity.WARNING),
+        QUESTION_NOT_REPLIED("개발자 질문을 답글 대신 일반 메시지로 게시", Severity.WARNING),
         STARTED("MOA 시작", Severity.INFO),
         OPS_TEST("운영 알림 테스트", Severity.INFO);
 

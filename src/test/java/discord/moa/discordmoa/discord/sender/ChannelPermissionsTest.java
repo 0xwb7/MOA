@@ -33,10 +33,22 @@ class ChannelPermissionsTest {
     }
 
     @Test
-    void 메시지_기록_보기는_요구하지_않는다() {
+    void 발송_기준은_메시지_기록_보기를_요구하지_않는다() {
         assertThat(ChannelPermissions.required(mock(TextChannel.class)))
                 .containsExactly(Permission.VIEW_CHANNEL, Permission.MESSAGE_SEND)
                 .doesNotContain(Permission.MESSAGE_HISTORY);
+    }
+
+    @Test
+    void 팀_채널_등록은_메시지_기록_보기까지_요구한다() {
+        TextChannel channel = channel(TextChannel.class, true, true);
+        given(channel.getGuild().getSelfMember().hasPermission(channel, Permission.MESSAGE_HISTORY)).willReturn(false);
+
+        assertThat(ChannelPermissions.requiredForTeamChannel(channel))
+                .containsExactly(Permission.VIEW_CHANNEL, Permission.MESSAGE_SEND, Permission.MESSAGE_HISTORY);
+        assertThat(ChannelPermissions.missingForTeamChannel(channel)).containsExactly(Permission.MESSAGE_HISTORY);
+        assertThat(ChannelPermissions.missing(channel)).isEmpty();   // 발송 기준은 그대로
+        assertThat(ChannelPermissions.canReply(channel)).isFalse();
     }
 
     @Test

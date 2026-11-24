@@ -17,7 +17,6 @@ import java.util.Optional;
 @Component
 public class ButtonListener extends ListenerAdapter {
 
-    static final String NOT_READY = "아직 준비 중인 기능이에요.";
     static final String NOT_PM = "이 팀의 PM만 확인할 수 있어요.";
     static final String NOT_FOUND = "찾을 수 없는 항목이에요.";
     static final String CONFIRMED_LABEL = "✅ 확인 완료";
@@ -43,8 +42,8 @@ public class ButtonListener extends ListenerAdapter {
         ButtonId id = parsed.get();
         switch (id.action()) {
             case "confirm" -> handleConfirm(event, id.itemId());
-            // 개발자에게 질문하기는 다음 작업에서 구현한다
-            case "ask" -> event.reply(NOT_READY).setEphemeral(true).queue();
+            // 응답은 모달 하나뿐이다 (DB 조회 없이 바로 띄우고, 검사는 제출할 때 ModalListener에서 한다)
+            case "ask" -> event.replyModal(QuestionModal.create(id.itemId())).queue();
             default -> log.warn("알 수 없는 버튼이라 무시해요: componentId={}", event.getComponentId());
         }
     }

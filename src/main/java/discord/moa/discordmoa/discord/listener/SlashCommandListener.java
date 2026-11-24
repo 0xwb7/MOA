@@ -120,11 +120,9 @@ public class SlashCommandListener extends ListenerAdapter {
                         .setEphemeral(true).queue();
                 return;
             }
-            List<Permission> missing = ChannelPermissions.missing(channel);
+            List<Permission> missing = ChannelPermissions.missingForTeamChannel(channel);
             if (!missing.isEmpty()) {
-                event.reply("⚠️ " + ChannelPermissions.describeMissing(channel, missing)
-                                + "\n채널 설정 → 권한에서 MOA 봇(또는 봇 역할)에 이 권한을 준 뒤 다시 /팀등록 해 주세요.")
-                        .setEphemeral(true).queue();
+                event.reply(describeMissingTeamChannelPermissions(channel, missing)).setEphemeral(true).queue();
                 return;
             }
             TeamRegistration registration = teamService.register(name, channelId, pmId);
@@ -136,6 +134,14 @@ public class SlashCommandListener extends ListenerAdapter {
             log.error("팀 등록 중 오류: name={}, channelId={}", name, channelId, e);
             event.reply(UNEXPECTED_ERROR).setEphemeral(true).queue();
         }
+    }
+
+    static String describeMissingTeamChannelPermissions(TextChannel channel, List<Permission> missing) {
+        StringBuilder text = new StringBuilder("⚠️ ").append(ChannelPermissions.describeMissing(channel, missing));
+        if (missing.contains(Permission.MESSAGE_HISTORY)) {
+            text.append("\n" + Permission.MESSAGE_HISTORY.getName() + " 권한은 개발자 질문을 요약 메시지의 답글로 달 때 필요해요.");
+        }
+        return text.append("\n채널 설정 → 권한에서 MOA 봇(또는 봇 역할)에 이 권한을 준 뒤 다시 /팀등록 해 주세요.").toString();
     }
 
     static String describeTeamRegistration(TeamRegistration registration) {

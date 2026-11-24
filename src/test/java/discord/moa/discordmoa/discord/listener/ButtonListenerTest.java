@@ -6,6 +6,8 @@ import net.dv8tion.jda.api.components.buttons.Button;
 import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
 import net.dv8tion.jda.api.requests.RestAction;
+import net.dv8tion.jda.api.modals.Modal;
+import net.dv8tion.jda.api.requests.restaction.interactions.ModalCallbackAction;
 import net.dv8tion.jda.api.requests.restaction.interactions.ReplyCallbackAction;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -231,12 +233,17 @@ class ButtonListenerTest {
     // ---- 질문하기, 버튼 ID ----
 
     @Test
-    void 질문하기_버튼은_준비_중이라고_본인에게만_알린다() {
+    void 질문하기_버튼은_DB를_보지_않고_질문_모달만_띄운다() {
         Click click = click("ask:11");
 
         listener.onButtonInteraction(click.event);
 
-        click.verifyEphemeralReply(ButtonListener.NOT_READY);
+        ArgumentCaptor<Modal> modal = ArgumentCaptor.forClass(Modal.class);
+        verify(click.event).replyModal(modal.capture());
+        verify(click.modalAction).queue();
+        assertThat(modal.getValue().getId()).isEqualTo("askModal:11");
+        assertThat(modal.getValue().getTitle()).isEqualTo("개발자에게 질문하기");
+        verify(click.event, never()).reply(anyString());
         verifyNoInteractions(confirmService);
     }
 
@@ -281,6 +288,8 @@ class ButtonListenerTest {
         verify(click.event, never()).deferReply();
         if (calls.getFirst().equals("reply")) {
             verify(click.reply).queue();
+        } else if (calls.getFirst().equals("replyModal")) {
+            verify(click.modalAction).queue();
         } else {
             assertThat(calls.getFirst()).isEqualTo("editButton");
             verify(click.editAction).queue(any(), any());
@@ -305,6 +314,7 @@ class ButtonListenerTest {
         given(click.reply.setEphemeral(true)).willReturn(click.reply);
         given(click.event.getButton()).willReturn(Button.success("confirm:" + ITEM_ID, "확인했어요"));
         given(click.event.editButton(any())).willReturn(click.editAction);
+        given(click.event.replyModal(any(Modal.class))).willReturn(click.modalAction);
         return click;
     }
 
@@ -313,6 +323,7 @@ class ButtonListenerTest {
         final ButtonInteractionEvent event = mock(ButtonInteractionEvent.class);
         final ReplyCallbackAction reply = mock(ReplyCallbackAction.class);
         final RestAction<Void> editAction = mock(RestAction.class);
+        final ModalCallbackAction modalAction = mock(ModalCallbackAction.class);
 
         void verifyEphemeralReply(String message) {
             verify(event).reply(message);

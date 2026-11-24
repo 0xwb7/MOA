@@ -33,7 +33,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 /**
- * /팀등록: 봇이 발송할 수 없는 채널이면 등록하지 않고, 신규와 수정을 응답에서 구분한다.
+ * /팀등록: 봇이 발송하거나 질문 답글을 달 수 없는 채널이면 등록하지 않고, 신규와 수정을 응답에서 구분한다.
  */
 class TeamRegisterCommandTest {
 
@@ -53,24 +53,37 @@ class TeamRegisterCommandTest {
     @Test
     void 봇에게_권한이_없는_채널이면_등록하지_않고_빠진_권한을_알려준다() {
         givenCommand(true);
-        givenPermissions(false, false);
+        givenPermissions(false, false, false);
 
         listener.onSlashCommandInteraction(event);
 
         assertThat(replyText()).contains("봇에게 #team-1 채널의", Permission.VIEW_CHANNEL.getName(),
-                Permission.MESSAGE_SEND.getName(), "다시 /팀등록");
+                Permission.MESSAGE_SEND.getName(), Permission.MESSAGE_HISTORY.getName(), "다시 /팀등록");
         verify(teamService, never()).register(anyString(), anyLong(), anyLong());
     }
 
     @Test
     void 메시지_보내기만_없어도_등록하지_않는다() {
         givenCommand(true);
-        givenPermissions(true, false);
+        givenPermissions(true, false, true);
 
         listener.onSlashCommandInteraction(event);
 
         assertThat(replyText()).contains(Permission.MESSAGE_SEND.getName())
-                .doesNotContain(Permission.VIEW_CHANNEL.getName());
+                .doesNotContain(Permission.VIEW_CHANNEL.getName(), Permission.MESSAGE_HISTORY.getName());
+        verify(teamService, never()).register(anyString(), anyLong(), anyLong());
+    }
+
+    @Test
+    void 메시지_기록_보기가_없으면_질문_답글에_필요하다고_알리고_등록하지_않는다() {
+        givenCommand(true);
+        givenPermissions(true, true, false);
+
+        listener.onSlashCommandInteraction(event);
+
+        assertThat(replyText()).isEqualTo("⚠️ 봇에게 #team-1 채널의 " + Permission.MESSAGE_HISTORY.getName() + " 권한이 없어요.\n"
+                + Permission.MESSAGE_HISTORY.getName() + " 권한은 개발자 질문을 요약 메시지의 답글로 달 때 필요해요.\n"
+                + "채널 설정 → 권한에서 MOA 봇(또는 봇 역할)에 이 권한을 준 뒤 다시 /팀등록 해 주세요.");
         verify(teamService, never()).register(anyString(), anyLong(), anyLong());
     }
 
@@ -87,7 +100,7 @@ class TeamRegisterCommandTest {
     @Test
     void 신규_등록이면_등록_완료로_응답한다() {
         givenCommand(true);
-        givenPermissions(true, true);
+        givenPermissions(true, true, true);
         given(teamService.register("1팀", CHANNEL_ID, 8L))
                 .willReturn(new TeamRegistration("1팀", true, 8L, null, CHANNEL_ID, null));
 
@@ -99,7 +112,7 @@ class TeamRegisterCommandTest {
     @Test
     void 기존_팀_수정이면_이전_PM과_새_PM을_보여준다() {
         givenCommand(true);
-        givenPermissions(true, true);
+        givenPermissions(true, true, true);
         given(teamService.register("1팀", CHANNEL_ID, 8L))
                 .willReturn(new TeamRegistration("1팀", false, 8L, 7L, CHANNEL_ID, CHANNEL_ID));
 
@@ -135,12 +148,13 @@ class TeamRegisterCommandTest {
         given(event.reply(anyString())).willReturn(reply);
     }
 
-    private void givenPermissions(boolean view, boolean send) {
+    private void givenPermissions(boolean view, boolean send, boolean history) {
         given(channel.getName()).willReturn("team-1");
         given(channel.getGuild()).willReturn(guild);
         given(guild.getSelfMember()).willReturn(self);
         given(self.hasPermission(channel, Permission.VIEW_CHANNEL)).willReturn(view);
         given(self.hasPermission(channel, Permission.MESSAGE_SEND)).willReturn(send);
+        given(self.hasPermission(channel, Permission.MESSAGE_HISTORY)).willReturn(history);
     }
 
     private String replyText() {
