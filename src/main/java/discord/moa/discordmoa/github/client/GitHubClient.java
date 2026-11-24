@@ -101,6 +101,27 @@ public class GitHubClient {
         }
     }
 
+    /**
+     * ref(커밋 SHA) 시점의 파일 내용. 파일이 없으면(404) 빈 값.
+     * path는 "/"로 나눠 세그먼트마다 인코딩한다 (파일 경로의 "/"가 %2F로 바뀌지 않게).
+     */
+    public Optional<String> findFileContent(Long installationId, String owner, String repo, String path, String ref) {
+        try {
+            return Optional.ofNullable(
+                    restClient.get()
+                            .uri(builder -> builder.pathSegment("repos", owner, repo, "contents")
+                                    .pathSegment(path.split("/"))
+                                    .queryParam("ref", ref)
+                                    .build())
+                            .headers(headers -> GitHubHeaders.apply(headers, tokenProvider.getInstallationToken(installationId), GitHubHeaders.RAW))
+                            .retrieve()
+                            .body(String.class)
+            );
+        } catch (HttpClientErrorException.NotFound e) {
+            return Optional.empty();
+        }
+    }
+
     public GitHubCommitPage listCommits(Long installationId, String owner, String repo, String sha, int perPage) {
         try {
             ResponseEntity<List<GitHubCommit>> response = restClient.get()

@@ -26,6 +26,8 @@ final class LocalHttpServer implements AutoCloseable {
 
     private final HttpServer server;
     final List<String> requests = new CopyOnWriteArrayList<>();
+    final List<String> rawUris = new CopyOnWriteArrayList<>();       // 인코딩된 그대로의 경로와 쿼리
+    final List<String> acceptHeaders = new CopyOnWriteArrayList<>();
 
     LocalHttpServer(Handler handler) throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -41,6 +43,9 @@ final class LocalHttpServer implements AutoCloseable {
         String method = exchange.getRequestMethod();
         String path = exchange.getRequestURI().getPath();
         requests.add(method + " " + path);
+        String rawQuery = exchange.getRequestURI().getRawQuery();
+        rawUris.add(exchange.getRequestURI().getRawPath() + (rawQuery == null ? "" : "?" + rawQuery));
+        acceptHeaders.add(String.valueOf(exchange.getRequestHeaders().getFirst("Accept")));
         Response response = handler.handle(method, path);
         try {
             Thread.sleep(response.delayMs());

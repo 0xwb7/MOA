@@ -6,6 +6,7 @@ final class GitHubHeaders {
 
     static final String JSON = "application/vnd.github+json";
     static final String SHA = "application/vnd.github.sha";
+    static final String RAW = "application/vnd.github.raw+json";   // contents API: 파일 내용을 그대로 받는다
 
     private static final String API_VERSION_HEADER = "X-GitHub-Api-Version";
     private static final String API_VERSION = "2022-11-28";

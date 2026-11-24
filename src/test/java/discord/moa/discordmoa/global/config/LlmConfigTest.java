@@ -60,7 +60,9 @@ class LlmConfigTest {
                     .contains("[주소(endpoints)]", "fetch(`${BASE_URL}/api/auth/login`, { method: 'POST' }) → \"POST /api/auth/login\"",
                             "로그인 기능의 서버 쪽이 준비됐어요 (화면은 아직이에요)", "\"확인되지 않았어요\"",
                             "path 변수 이름은 비교하지 않는다", "path 변수는 이름과 관계없이 {id}로 써",
-                            "@RequestMapping(\"/api/auth\"), 메서드에 @PostMapping(\"/login\") → \"POST /api/auth/login\"");
+                            "@RequestMapping(\"/api/auth\"), 메서드에 @PostMapping(\"/login\") → \"POST /api/auth/login\"",
+                            "파일 헤더에 '클래스 경로'가 있으면 메서드 경로 앞에 붙여 주소를 만들어.",
+                            "(예: /signup ↔ /api/auth/signup, /auth/login ↔ /api/auth/login)", "endpoints에는 더 긴 쪽 주소를 써.");
             assertThat(context.getBean(SummaryPrompt.class).usesPreviousItems()).isTrue();
             assertThat(context.getBean(SummaryPrompt.class).usesEndpoints()).isTrue();
             assertThat(context.getBean(OpenAiClient.class).isConfigured()).isFalse();

@@ -209,6 +209,46 @@ class SummaryInputBuilderTest {
         assertThat(input.droppedPreviousCount()).isZero();
     }
 
+    // ---- 컨트롤러 클래스 경로 ----
+
+    @Test
+    void 파일_헤더에_클래스_경로가_있으면_붙이고_없으면_그대로다() {
+        ChangeBatch batch = batch(1L, backend, List.of(commit(sha('a'), "회원가입 API")), List.of(
+                new FileChange(null, "src/AuthController.java", "modified", 12, 0, "+@PostMapping(\"/signup\")", true,
+                        "/api/auth"),
+                file("src/AuthService.java", "+void signup() {}")));
+
+        String text = builder(NO_LIMIT).build(List.of(batch)).text();
+
+        assertThat(text).contains("- src/AuthController.java (modified, +12 -0) | 클래스 경로: /api/auth [diff 일부만 포함]\n")
+                .contains("- src/AuthService.java (modified, +10 -2)\n");
+    }
+
+    @Test
+    void 재현_기존_컨트롤러에_메서드만_추가해도_클래스_경로와_화면_호출_주소가_한_입력에_들어간다() {
+        // AuthController(@RequestMapping("/api/auth"))에 @PostMapping("/signup")만 추가 + 같은 회차 FE가 /api/auth/signup 호출
+        ChangeBatch server = batch(1L, backend, List.of(commit(sha('a'), "feat: 회원가입 API")), List.of(
+                new FileChange(null, "src/main/java/moa/auth/AuthController.java", "modified", 5, 0, """
+                        @@ -20,6 +20,11 @@ public class AuthController {
+                        +    @PostMapping("/signup")
+                        +    public ResponseEntity<Void> signup(@RequestBody SignupRequest request) {
+                        +        authService.signup(request);
+                        +        return ResponseEntity.ok().build();
+                        +    }""", false, "/api/auth")));
+        ChangeBatch screen = batch(2L, frontend, List.of(commit(sha('b'), "feat: 회원가입 화면")), List.of(
+                file("src/pages/SignupPage.tsx",
+                        "+  await fetch(`${BASE_URL}/api/auth/signup`, { method: 'POST', body: JSON.stringify(form) });")));
+
+        String text = builder(NO_LIMIT).build(List.of(server, screen)).text();
+
+        assertThat(text)
+                .contains("- src/main/java/moa/auth/AuthController.java (modified, +5 -0) | 클래스 경로: /api/auth\n<diff>\n")
+                .contains("+    @PostMapping(\"/signup\")")
+                .contains("- src/pages/SignupPage.tsx (modified, +10 -2)\n<diff>\n")
+                .contains("fetch(`${BASE_URL}/api/auth/signup`, { method: 'POST'");
+        assertThat(text.indexOf("# 레포: team1/backend")).isLessThan(text.indexOf("# 레포: team1/frontend"));
+    }
+
     // ---- 이전 항목의 API 주소 (v4) ----
 
     @Test

@@ -33,6 +33,7 @@ public class SummaryInputBuilder {
     private static final String OMITTED_SIZE = "[diff 생략: 입력 크기 제한]";
     static final String PREVIOUS_HEADER = "## 이전에 PM에게 이미 보고한 기능 (참고용. 이번 변경 아님)\n";
     static final String PREVIOUS_ENDPOINTS = " | 주소: ";
+    static final String CLASS_PATH = " | 클래스 경로: ";
 
     private final AntPathMatcher matcher = new AntPathMatcher();
     private final int maxInputChars;
@@ -244,6 +245,10 @@ public class SummaryInputBuilder {
                 text.append(", 커밋 ").append(file.commitSha());
             }
             text.append(')');
+            // 메서드만 추가된 컨트롤러 diff에는 클래스 경로가 안 보여서 따로 알려 준다 (수집 때 head 시점 파일에서 뽑음)
+            if (file.classPath() != null) {
+                text.append(CLASS_PATH).append(file.classPath());
+            }
             if (note != null) {
                 text.append(' ').append(note);
             }

@@ -21,6 +21,9 @@
    이번 입력 안에 서버 쪽 변경과 화면 쪽 변경이 둘 다 있어도, 화면이 호출하는 주소와 서버가 만든 주소가 같지 않으면 PARTIAL로 써.
    주소가 같다는 것은 method와 path가 같다는 뜻이다. path 변수 이름은 비교하지 않는다(/api/posts/{postId}와 /api/posts/:id는 같다).
    base URL과 환경변수 접두사(예: ${BASE_URL}, process.env.API_URL)는 무시하고 비교해.
+   한쪽에 앞부분(클래스 경로, baseURL 등)이 빠져 있어 한 주소가 다른 주소의 끝부분과 정확히 같으면
+   (예: /signup ↔ /api/auth/signup, /auth/login ↔ /api/auth/login) method가 같고 같은 기능일 때 같은 주소로 본다.
+   endpoints에는 더 긴 쪽 주소를 써.
    한쪽만 보이거나 확실하지 않으면 PARTIAL로 써.
    (예외: 아래 [이전에 보고한 기능] 규칙 2에 해당하면 이전 PARTIAL 항목을 근거로 READY를 쓸 수 있다.)
 4. 없는 기능을 지어내지 마. 커밋 메시지가 모호하면 diff를 보고 판단하고,
@@ -38,6 +41,9 @@
    예) axios.get(`${process.env.API_URL}/api/users/${userId}?tab=posts`) → "GET /api/users/{id}"
    예) @PostMapping("/api/auth/login") → "POST /api/auth/login"
    예) 클래스에 @RequestMapping("/api/auth"), 메서드에 @PostMapping("/login") → "POST /api/auth/login" (클래스와 메서드 경로를 이어 붙여)
+   파일 헤더에 '클래스 경로'가 있으면 메서드 경로 앞에 붙여 주소를 만들어.
+   예) "- …/AuthController.java (modified, +12 -0) | 클래스 경로: /api/auth"의 diff에 @PostMapping("/signup")이 있음
+       → "POST /api/auth/signup"
 3. path 변수는 이름과 관계없이 {id}로 써.
    예) /api/posts/{postId}, /api/posts/:postId, /api/posts/${postId} → /api/posts/{id}
 4. method는 대문자로 쓰고, method를 코드에서 확인할 수 없으면 그 주소는 넣지 마.

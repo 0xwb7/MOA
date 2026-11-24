@@ -94,7 +94,7 @@ class ChangeCollectorTest {
     void setUp() {
         ChangeBatchWriter writer = new ChangeBatchWriter(changeBatchRepository, trackedRepoRepository);
         collector = new ChangeCollector(gitHubClient, trackedRepoRepository, teamRepository, writer, teamLocks,
-                deactivator, opsNotifier);
+                deactivator, opsNotifier, new ControllerClassPaths(gitHubClient));
         lenient().when(gitHubClient.findRepo(any(), anyString(), anyString())).thenAnswer(inv -> {
             String fullName = inv.getArgument(1) + "/" + inv.getArgument(2);
             return Optional.ofNullable(githubRepoIds.get(fullName)).map(id -> new GitHubRepo(id, fullName, "main"));
@@ -479,6 +479,33 @@ class ChangeCollectorTest {
         assertThat(collector.collectTeam(10L)).singleElement()
                 .extracting(RepoCollectResult::failureReason)
                 .isEqualTo(ChangeCollector.GITHUB_UNREACHABLE);
+    }
+
+    // ---- 컨트롤러 클래스 경로 ----
+
+    @Test
+    void 컨트롤러_파일은_클래스_경로를_채워_저장하고_조회가_실패해도_수집은_계속한다() {
+        TrackedRepo repo = repo(1L, "owner/app", BASE);
+        givenHead("owner", "app", HEAD);
+        given(gitHubClient.compare(INSTALLATION_ID, "owner", "app", BASE, HEAD)).willReturn(Optional.of(new GitHubCompare(
+                "ahead", 1, List.of(commit("c1", "회원가입 API", "alice", 11L, T1)),
+                List.of(file("src/AuthController.java", "modified", "+    @PostMapping(\"/signup\")"),
+                        file("src/UserController.java", "modified", "+    @GetMapping(\"/me\")"),
+                        file("README.md", "modified", "+ 문서")))));
+        given(gitHubClient.findFileContent(INSTALLATION_ID, "owner", "app", "src/AuthController.java", HEAD))
+                .willReturn(Optional.of("@RestController\n@RequestMapping(\"/api/auth\")\npublic class AuthController {}"));
+        given(gitHubClient.findFileContent(INSTALLATION_ID, "owner", "app", "src/UserController.java", HEAD))
+                .willThrow(new ResourceAccessException("Read timed out"));
+        givenSaveSucceeds();
+        given(trackedRepoRepository.advanceCursor(1L, BASE, HEAD)).willReturn(1);
+
+        ChangeBatch batch = collector.collect(repo).orElseThrow();
+
+        assertThat(batch.getFiles()).extracting(FileChange::filename, FileChange::classPath).containsExactly(
+                tuple("src/AuthController.java", "/api/auth"),
+                tuple("src/UserController.java", null),
+                tuple("README.md", null));
+        verify(trackedRepoRepository).advanceCursor(1L, BASE, HEAD);
     }
 
     // ---- GitHub에서 레포 삭제·재생성 ----

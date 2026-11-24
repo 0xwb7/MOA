@@ -57,6 +57,7 @@ public class ChangeCollector {
     private final TeamLocks teamLocks;
     private final TrackedRepoDeactivator deactivator;
     private final OpsNotifier opsNotifier;
+    private final ControllerClassPaths controllerClassPaths;
 
     /**
      * App을 지웠다가 다시 설치해 설치 ID가 바뀌었으면, 새 ID로 갱신하고 한 번만 다시 시도한다.
@@ -114,8 +115,11 @@ public class ChangeCollector {
             return Optional.empty();
         }
 
+        // 메서드만 추가된 컨트롤러 diff에도 클래스 경로(@RequestMapping)가 보이게 한다. 실패해도 경로 없이 진행
+        List<FileChange> files = controllerClassPaths.fill(ref.installationId(), ref.owner(), ref.name(), headSha,
+                collected.files());
         ChangeBatch batch = new ChangeBatch(repo, baseSha, headSha, Instant.now(),
-                collected.forcePushDetected(), collected.truncated(), collected.commits(), collected.files());
+                collected.forcePushDetected(), collected.truncated(), collected.commits(), files);
         return Optional.of(changeBatchWriter.saveAndAdvance(batch));
     }
 

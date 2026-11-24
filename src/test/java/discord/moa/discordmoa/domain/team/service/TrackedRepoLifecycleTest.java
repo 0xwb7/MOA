@@ -6,6 +6,7 @@ import discord.moa.discordmoa.domain.collect.entity.CommitSnapshot;
 import discord.moa.discordmoa.domain.collect.repository.ChangeBatchRepository;
 import discord.moa.discordmoa.domain.collect.service.ChangeBatchWriter;
 import discord.moa.discordmoa.domain.collect.service.ChangeCollector;
+import discord.moa.discordmoa.domain.collect.service.ControllerClassPaths;
 import discord.moa.discordmoa.domain.collect.service.RepoCollectResult;
 import discord.moa.discordmoa.domain.digest.entity.CycleKind;
 import discord.moa.discordmoa.domain.digest.entity.Digest;
@@ -111,7 +112,7 @@ class TrackedRepoLifecycleTest {
         service = new TrackedRepoService(trackedRepoRepository, teamRepository, gitHubClient, opsNotifier, deactivator, clock,
                 "https://github.com/apps/moa-test/installations/new");
         collector = new ChangeCollector(gitHubClient, trackedRepoRepository, teamRepository, changeBatchWriter, new TeamLocks(),
-                deactivator, opsNotifier);
+                deactivator, opsNotifier, new ControllerClassPaths(gitHubClient));
     }
 
     @AfterEach
@@ -394,6 +395,24 @@ class TrackedRepoLifecycleTest {
         assertThat(legacy.isActive()).isTrue();
         assertThat(legacy.getRegisteredAt()).isNull();
         assertThat(service.listActive(CHANNEL_ID).repos()).extracting(TrackedRepo::getFullName).contains("legacy/app");
+    }
+
+    @Test
+    void classPath가_없던_예전_배치의_파일_JSON도_그대로_읽는다() {
+        jdbcTemplate.update("""
+                insert into change_batch (tracked_repo_id, base_sha, head_sha, collected_at, status,
+                                          force_push_detected, truncated, commits, files)
+                values (?, 'base', 'head', ?, 'COLLECTED', false, false, ? FORMAT JSON, ? FORMAT JSON)
+                """, backend.getId(), java.sql.Timestamp.from(NOW), "[]",
+                "[{\"commitSha\":null,\"filename\":\"src/A.java\",\"status\":\"modified\",\"additions\":1,"
+                        + "\"deletions\":0,\"patch\":\"+a\",\"patchTruncated\":false}]");
+
+        ChangeBatch legacy = changeBatchRepository.findAll().getFirst();
+
+        assertThat(legacy.getFiles()).singleElement().satisfies(file -> {
+            assertThat(file.filename()).isEqualTo("src/A.java");
+            assertThat(file.classPath()).isNull();
+        });
     }
 
     // ---- helpers ----
