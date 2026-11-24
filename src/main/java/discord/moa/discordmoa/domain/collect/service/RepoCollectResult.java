@@ -14,7 +14,7 @@ public record RepoCollectResult(
 
     public enum Outcome {
         COLLECTED, NO_CHANGE, FAILED,
-        DEACTIVATED   // GitHub에서 레포가 사라졌거나 같은 이름의 다른 레포라 등록을 해제함 (운영 알림은 따로 보냄)
+        DEACTIVATED   // 같은 이름의 다른 레포(삭제 후 재생성)라 등록을 해제함 (운영 알림은 따로 보냄)
     }
 
     static RepoCollectResult collected(String repoFullName, ChangeBatch batch) {

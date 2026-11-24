@@ -47,8 +47,6 @@ public class ChangeCollector {
     static final String UNKNOWN_FAILURE = "수집 중 오류가 났어요 (서버 로그를 확인해 주세요)";
     static final String REPO_REPLACED =
             "GitHub에서 레포가 삭제됐거나 같은 이름으로 다시 만들어졌어요. 팀 채팅방에서 /레포등록을 다시 해주세요.";
-    static final String REPO_NOT_FOUND =
-            "GitHub에서 레포를 찾을 수 없어요 (삭제됐거나 MOA App 접근 권한에서 빠졌어요). 팀 채팅방에서 /레포등록을 다시 해주세요.";
 
     private static final Set<String> REWRITTEN_HISTORY_STATUSES = Set.of("diverged", "behind");
 
@@ -126,8 +124,11 @@ public class ChangeCollector {
      * 그러면 옛 커서가 새 레포에 없어 compare가 404가 되고 force push로 오인해 새 레포 커밋을 옛 레코드로 수집하게 된다.
      * 그래서 수집 전에 레포 자체를 확인한다.
      * <ul>
-     *   <li>레포 404(빈 결과): 삭제됐거나 App 접근이 빠짐 → 비활성화</li>
-     *   <li>레포 ID가 등록 때와 다름: 같은 이름으로 다시 만들어짐 → 비활성화</li>
+     *   <li>레포 ID가 등록 때와 다름: 같은 이름으로 다시 만들어짐 → 비활성화 (자동 비활성화는 이 경우뿐)</li>
+     *   <li>레포 404(빈 결과): 수집 실패(REPO_NOT_ACCESSIBLE)로만 처리한다. GitHub는 레포 삭제와
+     *       "App 설치 설정에서 레포 선택이 빠짐"을 둘 다 404로 줘서 구분할 수 없다. 설정 실수로 비활성화하면
+     *       미발송 배치가 버려지고 재등록 때 커서가 HEAD로 초기화돼 그 사이 커밋이 영구히 빠지므로,
+     *       데이터를 잃지 않는 쪽(수집만 실패)을 택한다. compare까지 가지 않으니 force push로 오인하지도 않는다.</li>
      *   <li>네트워크 오류·5xx 등: 예외가 그대로 올라가 수집 실패로만 처리한다 (비활성화하지 않음)</li>
      * </ul>
      * 이 확인을 통과한 뒤의 compare 404는 레포가 아니라 base 커밋이 없는 것이므로 기존처럼 force push로 처리한다.
@@ -135,7 +136,7 @@ public class ChangeCollector {
     private void verifySameRepo(TrackedRepo repo, RepoRef ref) {
         Optional<GitHubRepo> current = gitHubClient.findRepo(ref.installationId(), ref.owner(), ref.name());
         if (current.isEmpty()) {
-            throw new RepoGoneException(REPO_NOT_FOUND);
+            throw new RepoNotAccessibleException();
         }
         if (!current.get().id().equals(repo.getGithubRepoId())) {
             log.warn("레포 ID가 등록 때와 달라요 (삭제 후 같은 이름으로 재생성): repo={}, 등록={}, 지금={}",
@@ -189,7 +190,7 @@ public class ChangeCollector {
         if (e instanceof GitHubInstallationGoneException) {
             return INSTALLATION_GONE;
         }
-        if (e instanceof HttpClientErrorException.NotFound) {
+        if (e instanceof HttpClientErrorException.NotFound || e instanceof RepoNotAccessibleException) {
             return REPO_NOT_ACCESSIBLE;
         }
         if (e instanceof ResourceAccessException) {
@@ -288,8 +289,17 @@ public class ChangeCollector {
     }
 
     /**
-     * GitHub에서 레포가 사라졌거나 다른 레포로 바뀌었다. 수집하지 않고 등록을 해제한다.
+     * GitHub의 같은 이름 레포가 등록 때와 다른 레포다 (삭제 후 재생성). 수집하지 않고 등록을 해제한다.
      */
+    /**
+     * 레포 조회가 404였다 (삭제됐거나 App 접근 권한에서 빠짐). 수집 실패로만 처리하고 등록은 유지한다.
+     */
+    private static final class RepoNotAccessibleException extends RuntimeException {
+        RepoNotAccessibleException() {
+            super("GitHub 레포 조회가 404예요");
+        }
+    }
+
     private static final class RepoGoneException extends RuntimeException {
         RepoGoneException(String reason) {
             super(reason);

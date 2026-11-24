@@ -511,27 +511,39 @@ class ChangeCollectorTest {
     }
 
     @Test
-    void 레포_자체가_404면_삭제된_것으로_보고_등록을_해제한다() {
+    void 레포_ID가_달라도_버린_변경이_없으면_알림에_건수를_쓰지_않는다() {
         TrackedRepo repo = repo(1L, "owner/app", BASE);
-        githubRepoIds.remove("owner/app");
+        githubRepoIds.put("owner/app", 999L);
         given(trackedRepoRepository.findAllByTeamIdAndActiveTrueOrderByIdAsc(10L)).willReturn(List.of(repo));
         given(deactivator.deactivate(eq(1L), any(Instant.class))).willReturn(OptionalInt.of(0));
         given(teamRepository.findById(10L)).willReturn(Optional.of(team));
 
-        assertThat(collector.collectTeam(10L)).singleElement().satisfies(result -> {
-            assertThat(result.outcome()).isEqualTo(RepoCollectResult.Outcome.DEACTIVATED);
-            assertThat(result.failureReason()).isEqualTo(ChangeCollector.REPO_NOT_FOUND);
-        });
-        verify(gitHubClient, never()).findHeadSha(any(), anyString(), anyString(), anyString());
+        collector.collectTeam(10L);
+
         ArgumentCaptor<OpsEvent> event = ArgumentCaptor.forClass(OpsEvent.class);
         verify(opsNotifier).notify(event.capture());
-        assertThat(event.getValue().detail()).doesNotContain("보내지 않아요");   // 버린 변경이 없으면 쓰지 않는다
+        assertThat(event.getValue().detail()).doesNotContain("보내지 않아요");
+    }
+
+    @Test
+    void 레포_자체가_404면_등록은_유지하고_수집_실패로만_둔다() {
+        // 삭제와 "App 설치 설정에서 레포 선택이 빠짐"을 구분할 수 없어서, 데이터를 잃지 않게 해제하지 않는다
+        TrackedRepo repo = repo(1L, "owner/app", BASE);
+        githubRepoIds.remove("owner/app");
+        given(trackedRepoRepository.findAllByTeamIdAndActiveTrueOrderByIdAsc(10L)).willReturn(List.of(repo));
+
+        assertThat(collector.collectTeam(10L)).containsExactly(new RepoCollectResult("owner/app",
+                RepoCollectResult.Outcome.FAILED, 0, 0, false, false, ChangeCollector.REPO_NOT_ACCESSIBLE));
+        verify(gitHubClient, never()).findHeadSha(any(), anyString(), anyString(), anyString());
+        verify(gitHubClient, never()).compare(any(), anyString(), anyString(), anyString(), anyString());
+        verify(trackedRepoRepository, never()).markCollected(any(), any());
+        verifyNoInteractions(deactivator, opsNotifier, changeBatchRepository);
     }
 
     @Test
     void 이미_다른_경로에서_해제됐으면_알림을_다시_보내지_않는다() {
         TrackedRepo repo = repo(1L, "owner/app", BASE);
-        githubRepoIds.remove("owner/app");
+        githubRepoIds.put("owner/app", 999L);
         given(trackedRepoRepository.findAllByTeamIdAndActiveTrueOrderByIdAsc(10L)).willReturn(List.of(repo));
         given(deactivator.deactivate(eq(1L), any(Instant.class))).willReturn(OptionalInt.empty());
 
