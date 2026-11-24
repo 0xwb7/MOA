@@ -1,0 +1,54 @@
+name: moa
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: moa
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+      TZ: Asia/Seoul
+    command:
+      - --innodb-buffer-pool-size=128M
+      - --performance-schema=OFF
+      - --max-connections=30
+      - --mysqlx=OFF
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  app:
+    image: ${MOA_IMAGE}:${MOA_TAG:-latest}
+    restart: unless-stopped
+    env_file:
+      - /etc/moa/moa.env
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/moa?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
+      GITHUB_PRIVATE_KEY_PATH: /run/secrets/github-app.pem
+      JAVA_TOOL_OPTIONS: >-
+        -Xms256m -Xmx512m -XX:MaxMetaspaceSize=192m
+        -XX:+ExitOnOutOfMemoryError -Duser.timezone=Asia/Seoul
+    volumes:
+      - /etc/moa/github-app.pem:/run/secrets/github-app.pem:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+    stop_grace_period: 30s
+    mem_limit: 1g
+    logging: *logging
+
+volumes:
+  mysql-data:
