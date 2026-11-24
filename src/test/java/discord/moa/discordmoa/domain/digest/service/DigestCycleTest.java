@@ -893,7 +893,7 @@ class DigestCycleTest {
     private void givenSummaryLlm(SummaryStatus[] statuses, String title) {
         given(changeSummarizer.summarize(anyLong(), eq(LlmCallPurpose.DIGEST))).willAnswer(inv -> {
             List<ChangeBatch> batches = changeBatchRepository
-                    .findAllByTrackedRepoTeamIdAndStatusOrderByIdAsc(team.getId(), ChangeBatchStatus.COLLECTED);
+                    .findAllOfActiveReposByTeamIdAndStatus(team.getId(), ChangeBatchStatus.COLLECTED);
             String firstSha = batches.getFirst().getCommits().getFirst().sha();
             List<SummaryItem> items = new ArrayList<>();
             for (SummaryStatus status : statuses) {
@@ -904,7 +904,7 @@ class DigestCycleTest {
     }
 
     private List<Long> collectedIds() {
-        return changeBatchRepository.findAllByTrackedRepoTeamIdAndStatusOrderByIdAsc(team.getId(), ChangeBatchStatus.COLLECTED)
+        return changeBatchRepository.findAllOfActiveReposByTeamIdAndStatus(team.getId(), ChangeBatchStatus.COLLECTED)
                 .stream().map(ChangeBatch::getId).toList();
     }
 

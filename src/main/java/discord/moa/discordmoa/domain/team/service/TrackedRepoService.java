@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 @Service
 public class TrackedRepoService {
@@ -32,6 +33,7 @@ public class TrackedRepoService {
     private final TeamRepository teamRepository;
     private final GitHubClient gitHubClient;
     private final OpsNotifier opsNotifier;
+    private final TrackedRepoDeactivator deactivator;
     private final Clock clock;
     private final String installUrl;
 
@@ -39,19 +41,22 @@ public class TrackedRepoService {
                               TeamRepository teamRepository,
                               GitHubClient gitHubClient,
                               OpsNotifier opsNotifier,
+                              TrackedRepoDeactivator deactivator,
                               Clock clock,
                               @Value("${github.install-url}") String installUrl) {
         this.trackedRepoRepository = trackedRepoRepository;
         this.teamRepository = teamRepository;
         this.gitHubClient = gitHubClient;
         this.opsNotifier = opsNotifier;
+        this.deactivator = deactivator;
         this.clock = clock;
         this.installUrl = installUrl;
     }
 
     /**
      * - 같은 팀이 이미 등록한 활성 레포: 설치 ID만 갱신한다 (App 재설치 후 등).
-     * - 해제된(비활성) 레포: 같은 팀이면 다시 활성화, 다른 팀이면 이 팀으로 옮긴다. 커서는 지금 최신 커밋으로 초기화.
+     * - 해제된(비활성) 레포: 같은 팀이면 다시 활성화, 다른 팀이면 이 팀으로 옮긴다. 커서는 지금 최신 커밋으로 초기화하고,
+     *   해제돼 있던 동안 남은 미발송 배치(해제 뒤 발송 실패로 되돌아온 것 등)는 버린다.
      * - 다른 팀의 활성 레포: 거절한다.
      */
     public RepoRegistration register(Long channelId, String url) {
@@ -97,6 +102,8 @@ public class TrackedRepoService {
         String previousTeamName = registered.getTeam().getName();
         String headSha = findHeadSha(installationId, address, repo);
 
+        // "해제돼 있던 동안의 변경은 건너뛴다": 비활성일 때 남은 COLLECTED를 다시 보내지 않는다
+        deactivator.discardCollected(registered.getId());
         int updated = trackedRepoRepository.reactivate(registered.getId(), team, installationId,
                 repo.fullName(), repo.defaultBranch(), headSha, clock.instant());
         if (updated == 0) {
@@ -110,7 +117,8 @@ public class TrackedRepoService {
     }
 
     /**
-     * /레포해제: 이 채널 팀의 활성 레포만 비활성화한다. 이미 수집된 배치(COLLECTED·PREPARED)는 건드리지 않는다.
+     * /레포해제: 이 채널 팀의 활성 레포만 비활성화하고, 아직 회차에 담기지 않은 배치(COLLECTED)는 버린다.
+     * 이미 회차에 담긴 배치(PREPARED)는 그대로 발송된다.
      * GitHub를 부르지 않는다 (삭제됐거나 접근이 끊긴 레포도 해제할 수 있게).
      *
      * @param input "owner/repo" 또는 GitHub 주소
@@ -126,12 +134,13 @@ public class TrackedRepoService {
                 .findFirst()
                 .orElseThrow(() -> notRegisteredHere(fullName));
 
-        if (trackedRepoRepository.deactivate(target.getId(), clock.instant()) == 0) {
+        OptionalInt discarded = deactivator.deactivate(target.getId(), clock.instant());
+        if (discarded.isEmpty()) {
             throw new IllegalStateException("이미 해제된 레포예요: " + target.getFullName());
         }
         opsNotifier.notify(new OpsEvent(OpsEvent.Type.REPO_DEACTIVATED, team.getName(), null,
                 "해제한 사람: " + actorName + " (<@" + actorId + ">)\n레포: " + target.getFullName()));
-        return new RepoDeactivation(team.getName(), target.getFullName());
+        return new RepoDeactivation(team.getName(), target.getFullName(), discarded.getAsInt());
     }
 
     private IllegalStateException notRegisteredHere(String fullName) {

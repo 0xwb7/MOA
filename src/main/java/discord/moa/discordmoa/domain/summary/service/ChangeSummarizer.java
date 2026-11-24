@@ -94,7 +94,7 @@ public class ChangeSummarizer {
 
     public SummaryResult summarize(Long teamId, LlmCallPurpose purpose) {
         List<ChangeBatch> batches = changeBatchRepository
-                .findAllByTrackedRepoTeamIdAndStatusOrderByIdAsc(teamId, ChangeBatchStatus.COLLECTED);
+                .findAllOfActiveReposByTeamIdAndStatus(teamId, ChangeBatchStatus.COLLECTED);
         if (batches.isEmpty()) {
             return SummaryResult.noChanges();
         }

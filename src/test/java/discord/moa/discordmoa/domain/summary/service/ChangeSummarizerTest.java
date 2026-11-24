@@ -78,7 +78,7 @@ class ChangeSummarizerTest {
 
     @BeforeEach
     void setUp() {
-        given(changeBatchRepository.findAllByTrackedRepoTeamIdAndStatusOrderByIdAsc(TEAM_ID, ChangeBatchStatus.COLLECTED))
+        given(changeBatchRepository.findAllOfActiveReposByTeamIdAndStatus(TEAM_ID, ChangeBatchStatus.COLLECTED))
                 .willAnswer(inv -> List.copyOf(batches));
         given(llmCallRepository.save(any(LlmCall.class))).willAnswer(inv -> {
             calls.add(inv.getArgument(0));

@@ -7,6 +7,9 @@ import discord.moa.discordmoa.domain.collect.repository.ChangeBatchRepository;
 import discord.moa.discordmoa.domain.collect.service.ChangeBatchWriter;
 import discord.moa.discordmoa.domain.collect.service.ChangeCollector;
 import discord.moa.discordmoa.domain.collect.service.RepoCollectResult;
+import discord.moa.discordmoa.domain.digest.entity.CycleKind;
+import discord.moa.discordmoa.domain.digest.entity.Digest;
+import discord.moa.discordmoa.domain.digest.repository.DigestRepository;
 import discord.moa.discordmoa.domain.ops.OpsEvent;
 import discord.moa.discordmoa.domain.ops.OpsNotifier;
 import discord.moa.discordmoa.domain.team.entity.Team;
@@ -27,14 +30,17 @@ import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -52,7 +58,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
  */
 @DataJpaTest
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
-@Import(ChangeBatchWriter.class)
+@Import({ChangeBatchWriter.class, TrackedRepoDeactivator.class})
 class TrackedRepoLifecycleTest {
 
     private static final Instant NOW = Instant.parse("2026-11-27T03:00:00Z");
@@ -70,6 +76,12 @@ class TrackedRepoLifecycleTest {
     private ChangeBatchRepository changeBatchRepository;
     @Autowired
     private ChangeBatchWriter changeBatchWriter;
+    @Autowired
+    private TrackedRepoDeactivator deactivator;
+    @Autowired
+    private DigestRepository digestRepository;
+    @Autowired
+    private PlatformTransactionManager transactionManager;
     @Autowired
     private EntityManagerFactory entityManagerFactory;
     @Autowired
@@ -95,7 +107,7 @@ class TrackedRepoLifecycleTest {
         backend = trackedRepoRepository.save(new TrackedRepo(team, 1L, "team1/backend", "main", OLD_CURSOR, INSTALLATION_ID));
         frontend = trackedRepoRepository.save(new TrackedRepo(team, 2L, "team1/frontend", "main", OLD_CURSOR, INSTALLATION_ID));
         otherApp = trackedRepoRepository.save(new TrackedRepo(otherTeam, 3L, "team2/app", "main", OLD_CURSOR, INSTALLATION_ID));
-        service = new TrackedRepoService(trackedRepoRepository, teamRepository, gitHubClient, opsNotifier, clock,
+        service = new TrackedRepoService(trackedRepoRepository, teamRepository, gitHubClient, opsNotifier, deactivator, clock,
                 "https://github.com/apps/moa-test/installations/new");
         collector = new ChangeCollector(gitHubClient, trackedRepoRepository, teamRepository, changeBatchWriter, new TeamLocks());
     }
@@ -103,6 +115,7 @@ class TrackedRepoLifecycleTest {
     @AfterEach
     void tearDown() {
         changeBatchRepository.deleteAllInBatch();
+        digestRepository.deleteAllInBatch();
         trackedRepoRepository.deleteAllInBatch();
         teamRepository.deleteAllInBatch();
     }
@@ -113,7 +126,7 @@ class TrackedRepoLifecycleTest {
     void 해제한_레포는_수집_정기_회차_판단_목록_자동완성에서_빠진다() {
         RepoDeactivation result = service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice");
 
-        assertThat(result).isEqualTo(new RepoDeactivation("1팀", "team1/backend"));
+        assertThat(result).isEqualTo(new RepoDeactivation("1팀", "team1/backend", 0));
         TrackedRepo deactivated = reload(backend);
         assertThat(deactivated.isActive()).isFalse();
         assertThat(deactivated.getDeactivatedAt()).isEqualTo(NOW);
@@ -170,19 +183,51 @@ class TrackedRepoLifecycleTest {
     }
 
     @Test
-    void 해제해도_이미_수집된_COLLECTED와_PREPARED_배치는_그대로다() {
-        ChangeBatch collected = batch(backend, ChangeBatchStatus.COLLECTED);
-        ChangeBatch prepared = batch(backend, ChangeBatchStatus.PREPARED);
+    void 해제하면_아직_회차에_담기지_않은_COLLECTED는_버리고_PREPARED는_그대로_둔다() {
+        ChangeBatch collected = batch(backend, ChangeBatchStatus.COLLECTED, 3);
+        ChangeBatch collected2 = batch(backend, ChangeBatchStatus.COLLECTED, 2);
+        ChangeBatch prepared = batch(backend, ChangeBatchStatus.PREPARED, 1);
+        ChangeBatch sent = batch(backend, ChangeBatchStatus.SENT, 1);
+        ChangeBatch otherRepo = batch(frontend, ChangeBatchStatus.COLLECTED, 1);
 
-        service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice");
+        RepoDeactivation result = service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice");
 
-        assertThat(changeBatchRepository.findById(collected.getId()).orElseThrow().getStatus())
-                .isEqualTo(ChangeBatchStatus.COLLECTED);
-        assertThat(changeBatchRepository.findById(prepared.getId()).orElseThrow().getStatus())
-                .isEqualTo(ChangeBatchStatus.PREPARED);
-        // 다음 발송이 이 팀의 COLLECTED 배치를 그대로 가져간다
-        assertThat(changeBatchRepository.findAllByTrackedRepoTeamIdAndStatusOrderByIdAsc(team.getId(), ChangeBatchStatus.COLLECTED))
-                .extracting(ChangeBatch::getId).containsExactly(collected.getId());
+        assertThat(result.discardedCommitCount()).isEqualTo(5);   // 버린 배치의 커밋 수
+        assertThat(status(collected)).isEqualTo(ChangeBatchStatus.DISCARDED);
+        assertThat(status(collected2)).isEqualTo(ChangeBatchStatus.DISCARDED);
+        assertThat(status(prepared)).isEqualTo(ChangeBatchStatus.PREPARED);   // 이미 회차에 담긴 것은 그대로 발송
+        assertThat(status(sent)).isEqualTo(ChangeBatchStatus.SENT);
+        assertThat(status(otherRepo)).isEqualTo(ChangeBatchStatus.COLLECTED);
+        assertThat(changeBatchRepository.findAllOfActiveReposByTeamIdAndStatus(team.getId(), ChangeBatchStatus.COLLECTED))
+                .extracting(ChangeBatch::getId).containsExactly(otherRepo.getId());
+    }
+
+    @Test
+    void 보낼_변경이_없던_레포를_해제하면_버린_변경은_0건이다() {
+        assertThat(service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice").discardedCommitCount()).isZero();
+    }
+
+    @Test
+    void 해제한_레포에_COLLECTED가_남아_있어도_회차에_담지_않는다() {
+        ChangeBatch leftover = batch(backend, ChangeBatchStatus.COLLECTED, 1);
+        ChangeBatch active = batch(frontend, ChangeBatchStatus.COLLECTED, 1);
+        // 해제 플래그만 바뀐 상태 (예: 해제 직후 발송 실패로 PREPARED가 COLLECTED로 되돌아옴)
+        trackedRepoRepository.deactivate(backend.getId(), NOW);
+        Digest digest = digestRepository.save(new Digest(team, NOW, CycleKind.SCHEDULED, NOW));
+
+        int fallback = inTransaction(() -> changeBatchRepository.claimAllOfTeam(team.getId(), digest,
+                ChangeBatchStatus.COLLECTED, ChangeBatchStatus.PREPARED));
+        assertThat(fallback).isEqualTo(1);
+        assertThat(status(leftover)).isEqualTo(ChangeBatchStatus.COLLECTED);
+        assertThat(status(active)).isEqualTo(ChangeBatchStatus.PREPARED);
+
+        int llm = inTransaction(() -> changeBatchRepository.claimByIds(List.of(leftover.getId()), digest,
+                ChangeBatchStatus.COLLECTED, ChangeBatchStatus.PREPARED));
+        assertThat(llm).isZero();
+        assertThat(status(leftover)).isEqualTo(ChangeBatchStatus.COLLECTED);
+        // 요약이 읽는 목록에도 없다
+        assertThat(changeBatchRepository.findAllOfActiveReposByTeamIdAndStatus(team.getId(), ChangeBatchStatus.COLLECTED))
+                .isEmpty();
     }
 
     @Test
@@ -219,6 +264,17 @@ class TrackedRepoLifecycleTest {
         assertThat(trackedRepoRepository.count()).isEqualTo(3);   // 새 행을 만들지 않는다
         assertThat(service.listActive(CHANNEL_ID).repos()).extracting(TrackedRepo::getFullName)
                 .containsExactly("team1/backend", "team1/frontend");
+    }
+
+    @Test
+    void 다시_등록하면_해제돼_있던_동안_남은_COLLECTED를_보내지_않는다() {
+        service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice");
+        ChangeBatch revertedAfterDeactivation = batch(backend, ChangeBatchStatus.COLLECTED, 1);
+        givenInstalled("team1", "backend", 1L, INSTALLATION_ID);
+
+        service.register(CHANNEL_ID, "https://github.com/team1/backend");
+
+        assertThat(status(revertedAfterDeactivation)).isEqualTo(ChangeBatchStatus.DISCARDED);
     }
 
     @Test
@@ -298,11 +354,25 @@ class TrackedRepoLifecycleTest {
     }
 
     private ChangeBatch batch(TrackedRepo repo, ChangeBatchStatus status) {
+        return batch(repo, status, 1);
+    }
+
+    private ChangeBatch batch(TrackedRepo repo, ChangeBatchStatus status, int commitCount) {
         String sha = status.name().toLowerCase() + "-head";
-        CommitSnapshot commit = new CommitSnapshot(sha, "커밋", "alice", 11L, "Alice", NOW,
-                "https://github.com/" + repo.getFullName() + "/commit/" + sha);
-        ChangeBatch batch = new ChangeBatch(repo, "base", sha, NOW, false, false, List.of(commit), List.of());
+        List<CommitSnapshot> commits = IntStream.range(0, commitCount)
+                .mapToObj(i -> new CommitSnapshot(sha + i, "커밋", "alice", 11L, "Alice", NOW,
+                        "https://github.com/" + repo.getFullName() + "/commit/" + sha + i))
+                .toList();
+        ChangeBatch batch = new ChangeBatch(repo, "base", sha, NOW, false, false, commits, List.of());
         ReflectionTestUtils.setField(batch, "status", status);
         return changeBatchRepository.save(batch);
+    }
+
+    private ChangeBatchStatus status(ChangeBatch batch) {
+        return changeBatchRepository.findById(batch.getId()).orElseThrow().getStatus();
+    }
+
+    private int inTransaction(java.util.function.IntSupplier work) {
+        return new TransactionTemplate(transactionManager).execute(status -> work.getAsInt());
     }
 }

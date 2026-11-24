@@ -179,6 +179,15 @@ public class SlashCommandListener extends ListenerAdapter {
         });
     }
 
+    static String describeDeactivation(RepoDeactivation result) {
+        StringBuilder text = new StringBuilder("✅ ").append(result.fullName())
+                .append(" 레포 등록을 해제했어요. 이제 이 레포의 변경은 수집하지 않아요.\n");
+        if (result.discardedCommitCount() > 0) {
+            text.append("아직 보내지 않은 변경 ").append(result.discardedCommitCount()).append("건은 보내지 않아요.\n");
+        }
+        return text.append("다시 수집하려면 /레포등록 을 실행해 주세요.").toString();
+    }
+
     static String describeRegistration(RepoRegistration registration) {
         TrackedRepo repo = registration.repo();
         String branch = " (" + repo.getDefaultBranch() + " 브랜치) ";
@@ -201,9 +210,7 @@ public class SlashCommandListener extends ListenerAdapter {
         try {
             RepoDeactivation result = trackedRepoService.deactivate(channelId, input,
                     event.getUser().getIdLong(), event.getUser().getName());
-            event.reply("✅ " + result.fullName() + " 레포 등록을 해제했어요. 이제 이 레포의 변경은 수집하지 않아요.\n"
-                            + "이미 수집된 변경은 다음 발송에 포함돼요. 다시 수집하려면 /레포등록 을 실행해 주세요.")
-                    .setEphemeral(true).queue();
+            event.reply(describeDeactivation(result)).setEphemeral(true).queue();
         } catch (IllegalArgumentException | IllegalStateException e) {
             event.reply("⚠️ " + e.getMessage()).setEphemeral(true).queue();
         } catch (RuntimeException e) {

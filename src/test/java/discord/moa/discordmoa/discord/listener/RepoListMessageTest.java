@@ -2,6 +2,7 @@ package discord.moa.discordmoa.discord.listener;
 
 import discord.moa.discordmoa.domain.team.entity.Team;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
+import discord.moa.discordmoa.domain.team.service.RepoDeactivation;
 import discord.moa.discordmoa.domain.team.service.RepoRegistration;
 import discord.moa.discordmoa.domain.team.service.TrackedRepoService;
 import org.junit.jupiter.api.Test;
@@ -73,5 +74,16 @@ class RepoListMessageTest {
                 .contains("'2팀' 팀에서 이 팀으로 옮겨 등록했어요");
         assertThat(SlashCommandListener.describeRegistration(RepoRegistration.of(repo, RepoRegistration.Kind.NEW)))
                 .contains("레포가 등록됐어요");
+    }
+
+    @Test
+    void 해제_응답은_보내지_않게_된_변경이_있을_때만_건수를_알려준다() {
+        assertThat(SlashCommandListener.describeDeactivation(new RepoDeactivation("1팀", "team1/app", 3)))
+                .isEqualTo("✅ team1/app 레포 등록을 해제했어요. 이제 이 레포의 변경은 수집하지 않아요.\n"
+                        + "아직 보내지 않은 변경 3건은 보내지 않아요.\n"
+                        + "다시 수집하려면 /레포등록 을 실행해 주세요.");
+        assertThat(SlashCommandListener.describeDeactivation(new RepoDeactivation("1팀", "team1/app", 0)))
+                .isEqualTo("✅ team1/app 레포 등록을 해제했어요. 이제 이 레포의 변경은 수집하지 않아요.\n"
+                        + "다시 수집하려면 /레포등록 을 실행해 주세요.");
     }
 }

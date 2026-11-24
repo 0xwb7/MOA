@@ -48,13 +48,15 @@ class TrackedRepoServiceTest {
     private GitHubClient gitHubClient;
     @Mock
     private OpsNotifier opsNotifier;
+    @Mock
+    private TrackedRepoDeactivator deactivator;
 
     private TrackedRepoService service;
     private Team team;
 
     @BeforeEach
     void setUp() {
-        service = new TrackedRepoService(trackedRepoRepository, teamRepository, gitHubClient, opsNotifier,
+        service = new TrackedRepoService(trackedRepoRepository, teamRepository, gitHubClient, opsNotifier, deactivator,
                 Clock.fixed(NOW, ZoneOffset.UTC), INSTALL_URL);
         team = new Team("모아팀", CHANNEL_ID, 1L);
         ReflectionTestUtils.setField(team, "id", 10L);
