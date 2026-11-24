@@ -86,4 +86,16 @@ class RepoListMessageTest {
                 .isEqualTo("✅ team1/app 레포 등록을 해제했어요. 이제 이 레포의 변경은 수집하지 않아요.\n"
                         + "다시 수집하려면 /레포등록 을 실행해 주세요.");
     }
+
+    @Test
+    void 같은_이름의_이전_등록을_정리했으면_등록_응답에_알려준다() {
+        TrackedRepo repo = new TrackedRepo(team, 1L, "team1/app", "main", "a".repeat(40), 555L);
+
+        assertThat(SlashCommandListener.describeRegistration(
+                RepoRegistration.of(repo, RepoRegistration.Kind.NEW).withCleanedUpStale(true)))
+                .startsWith("✅ team1/app 레포가 등록됐어요.")
+                .endsWith("\n같은 이름의 이전 레포 등록을 정리했어요.");
+        assertThat(SlashCommandListener.describeRegistration(RepoRegistration.of(repo, RepoRegistration.Kind.NEW)))
+                .doesNotContain("정리");
+    }
 }

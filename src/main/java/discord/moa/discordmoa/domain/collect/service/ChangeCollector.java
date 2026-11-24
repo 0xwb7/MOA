@@ -7,13 +7,17 @@ import discord.moa.discordmoa.domain.team.entity.Team;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.domain.team.repository.TeamRepository;
 import discord.moa.discordmoa.domain.team.repository.TrackedRepoRepository;
+import discord.moa.discordmoa.domain.ops.OpsEvent;
+import discord.moa.discordmoa.domain.ops.OpsNotifier;
 import discord.moa.discordmoa.domain.team.service.TeamLocks;
+import discord.moa.discordmoa.domain.team.service.TrackedRepoDeactivator;
 import discord.moa.discordmoa.github.client.GitHubClient;
 import discord.moa.discordmoa.github.client.GitHubInstallationGoneException;
 import discord.moa.discordmoa.github.dto.GitHubCommit;
 import discord.moa.discordmoa.github.dto.GitHubCommitPage;
 import discord.moa.discordmoa.github.dto.GitHubCompare;
 import discord.moa.discordmoa.github.dto.GitHubFile;
+import discord.moa.discordmoa.github.dto.GitHubRepo;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -24,6 +28,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 
 @Slf4j
@@ -40,6 +45,10 @@ public class ChangeCollector {
     static final String REPO_NOT_ACCESSIBLE = "App이 이 레포에 접근할 수 없어요 (설치 설정에서 레포 선택이 빠졌을 수 있어요)";
     static final String GITHUB_UNREACHABLE = "GitHub가 응답하지 않아요 (잠시 후 다시 시도해 주세요)";
     static final String UNKNOWN_FAILURE = "수집 중 오류가 났어요 (서버 로그를 확인해 주세요)";
+    static final String REPO_REPLACED =
+            "GitHub에서 레포가 삭제됐거나 같은 이름으로 다시 만들어졌어요. 팀 채팅방에서 /레포등록을 다시 해주세요.";
+    static final String REPO_NOT_FOUND =
+            "GitHub에서 레포를 찾을 수 없어요 (삭제됐거나 MOA App 접근 권한에서 빠졌어요). 팀 채팅방에서 /레포등록을 다시 해주세요.";
 
     private static final Set<String> REWRITTEN_HISTORY_STATUSES = Set.of("diverged", "behind");
 
@@ -48,6 +57,8 @@ public class ChangeCollector {
     private final TeamRepository teamRepository;
     private final ChangeBatchWriter changeBatchWriter;
     private final TeamLocks teamLocks;
+    private final TrackedRepoDeactivator deactivator;
+    private final OpsNotifier opsNotifier;
 
     /**
      * App을 지웠다가 다시 설치해 설치 ID가 바뀌었으면, 새 ID로 갱신하고 한 번만 다시 시도한다.
@@ -84,6 +95,7 @@ public class ChangeCollector {
 
     private Optional<ChangeBatch> collectOnce(TrackedRepo repo) {
         RepoRef ref = RepoRef.of(repo);
+        verifySameRepo(repo, ref);
 
         Optional<String> head = gitHubClient.findHeadSha(ref.installationId(), ref.owner(), ref.name(), repo.getDefaultBranch());
         if (head.isEmpty()) {
@@ -109,6 +121,29 @@ public class ChangeCollector {
         return Optional.of(changeBatchWriter.saveAndAdvance(batch));
     }
 
+    /**
+     * 수집은 owner/name으로 레포를 찾으므로, 레포가 삭제된 뒤 같은 이름으로 다시 만들어지면 옛 레코드가 새 레포를 가리킨다.
+     * 그러면 옛 커서가 새 레포에 없어 compare가 404가 되고 force push로 오인해 새 레포 커밋을 옛 레코드로 수집하게 된다.
+     * 그래서 수집 전에 레포 자체를 확인한다.
+     * <ul>
+     *   <li>레포 404(빈 결과): 삭제됐거나 App 접근이 빠짐 → 비활성화</li>
+     *   <li>레포 ID가 등록 때와 다름: 같은 이름으로 다시 만들어짐 → 비활성화</li>
+     *   <li>네트워크 오류·5xx 등: 예외가 그대로 올라가 수집 실패로만 처리한다 (비활성화하지 않음)</li>
+     * </ul>
+     * 이 확인을 통과한 뒤의 compare 404는 레포가 아니라 base 커밋이 없는 것이므로 기존처럼 force push로 처리한다.
+     */
+    private void verifySameRepo(TrackedRepo repo, RepoRef ref) {
+        Optional<GitHubRepo> current = gitHubClient.findRepo(ref.installationId(), ref.owner(), ref.name());
+        if (current.isEmpty()) {
+            throw new RepoGoneException(REPO_NOT_FOUND);
+        }
+        if (!current.get().id().equals(repo.getGithubRepoId())) {
+            log.warn("레포 ID가 등록 때와 달라요 (삭제 후 같은 이름으로 재생성): repo={}, 등록={}, 지금={}",
+                    repo.getFullName(), repo.getGithubRepoId(), current.get().id());
+            throw new RepoGoneException(REPO_REPLACED);
+        }
+    }
+
     public List<RepoCollectResult> collectTeam(Long teamId) {
         List<RepoCollectResult> results = new ArrayList<>();
         // 해제된(비활성) 레포는 수집하지 않는다
@@ -120,6 +155,9 @@ public class ChangeCollector {
                 // /레포목록의 "마지막 수집 시각": 변경이 없어도 GitHub 확인에 성공하면 갱신한다
                 trackedRepoRepository.markCollected(repo.getId(), Instant.now());
                 results.add(result);
+            } catch (RepoGoneException e) {
+                deactivateGone(teamId, repo, e.getMessage());
+                results.add(RepoCollectResult.deactivated(repo.getFullName(), e.getMessage()));
             } catch (RuntimeException e) {
                 String reason = describeFailure(e);
                 if (reason.equals(UNKNOWN_FAILURE)) {
@@ -131,6 +169,20 @@ public class ChangeCollector {
             }
         }
         return results;
+    }
+
+    private void deactivateGone(Long teamId, TrackedRepo repo, String reason) {
+        log.warn("GitHub에서 레포를 찾을 수 없거나 다른 레포라 등록을 해제해요: repo={}, reason={}", repo.getFullName(), reason);
+        OptionalInt discarded = deactivator.deactivate(repo.getId(), Instant.now());
+        if (discarded.isEmpty()) {
+            return;   // 그사이 다른 경로(/레포해제 등)에서 이미 비활성화됐다
+        }
+        String teamName = teamRepository.findById(teamId).map(Team::getName).orElse(null);
+        StringBuilder detail = new StringBuilder("레포: ").append(repo.getFullName()).append("\n사유: ").append(reason);
+        if (discarded.getAsInt() > 0) {
+            detail.append("\n아직 보내지 않은 변경 ").append(discarded.getAsInt()).append("건은 보내지 않아요.");
+        }
+        opsNotifier.notify(new OpsEvent(OpsEvent.Type.REPO_DEACTIVATED, teamName, null, detail.toString()));
     }
 
     static String describeFailure(RuntimeException e) {
@@ -232,6 +284,15 @@ public class ChangeCollector {
         static RepoRef of(TrackedRepo repo) {
             String[] parts = repo.getFullName().split("/", 2);
             return new RepoRef(repo.getInstallationId(), parts[0], parts[1]);
+        }
+    }
+
+    /**
+     * GitHub에서 레포가 사라졌거나 다른 레포로 바뀌었다. 수집하지 않고 등록을 해제한다.
+     */
+    private static final class RepoGoneException extends RuntimeException {
+        RepoGoneException(String reason) {
+            super(reason);
         }
     }
 

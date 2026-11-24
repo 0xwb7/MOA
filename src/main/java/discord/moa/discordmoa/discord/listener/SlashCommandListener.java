@@ -194,7 +194,7 @@ public class SlashCommandListener extends ListenerAdapter {
         String baseline = repo.getLastProcessedSha() == null
                 ? "아직 커밋이 없는 레포라서 첫 커밋부터 수집할게요."
                 : "지금 이후의 변경부터 수집할게요.";
-        return switch (registration.kind()) {
+        String text = switch (registration.kind()) {
             case REFRESHED -> "✅ " + repo.getFullName() + " 설치 정보를 갱신했어요. 이전 수집 위치부터 이어서 수집해요.";
             case NEW -> "✅ " + repo.getFullName() + " 레포가 등록됐어요." + branch + baseline;
             case REACTIVATED -> "✅ " + repo.getFullName() + " 레포를 다시 등록했어요." + branch
@@ -202,6 +202,7 @@ public class SlashCommandListener extends ListenerAdapter {
             case MOVED -> "✅ " + repo.getFullName() + " 레포를 '" + registration.previousTeamName()
                     + "' 팀에서 이 팀으로 옮겨 등록했어요." + branch + baseline;
         };
+        return registration.cleanedUpStale() ? text + "\n같은 이름의 이전 레포 등록을 정리했어요." : text;
     }
 
     private void handleRepoUnregister(SlashCommandInteractionEvent event) {
@@ -370,6 +371,7 @@ public class SlashCommandListener extends ListenerAdapter {
                     + " | 잘림 " + yesNo(repo.truncated());
             case NO_CHANGE -> repo.repoFullName() + ": 변경 없음";
             case FAILED -> repo.repoFullName() + ": ❌ 수집 실패: " + repo.failureReason();
+            case DEACTIVATED -> repo.repoFullName() + ": ⛔ 등록 해제됨: " + repo.failureReason();
         };
     }
 

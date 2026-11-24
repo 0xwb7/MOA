@@ -58,6 +58,7 @@ public class TrackedRepoService {
      * - 해제된(비활성) 레포: 같은 팀이면 다시 활성화, 다른 팀이면 이 팀으로 옮긴다. 커서는 지금 최신 커밋으로 초기화하고,
      *   해제돼 있던 동안 남은 미발송 배치(해제 뒤 발송 실패로 되돌아온 것 등)는 버린다.
      * - 다른 팀의 활성 레포: 거절한다.
+     * - 같은 팀에 이름은 같고 GitHub 레포 ID가 다른 활성 등록(삭제 후 재생성된 레포의 옛 등록)은 정리한다.
      */
     public RepoRegistration register(Long channelId, String url) {
         Team team = teamRepository.findByDiscordChannelId(channelId)
@@ -72,14 +73,21 @@ public class TrackedRepoService {
                 .orElseThrow(() -> new IllegalStateException(notAccessibleMessage(address)));
 
         Optional<TrackedRepo> existing = trackedRepoRepository.findByGithubRepoId(repo.id());
+        if (existing.isPresent() && existing.get().isActive()
+                && !existing.get().getTeam().getId().equals(team.getId())) {
+            throw alreadyRegistered(repo);
+        }
+        boolean cleanedUpStale = cleanUpStaleSameName(team, repo);
+        return registerChecked(team, repo, installationId, address, existing).withCleanedUpStale(cleanedUpStale);
+    }
+
+    private RepoRegistration registerChecked(Team team, GitHubRepo repo, Long installationId, RepoAddress address,
+                                             Optional<TrackedRepo> existing) {
         if (existing.isPresent()) {
             TrackedRepo registered = existing.get();
             boolean sameTeam = registered.getTeam().getId().equals(team.getId());
             if (!registered.isActive()) {
                 return reactivate(team, registered, repo, installationId, address, sameTeam);
-            }
-            if (!sameTeam) {
-                throw alreadyRegistered(repo);
             }
             trackedRepoRepository.updateInstallationId(registered.getId(), installationId);
             registered.changeInstallationId(installationId);
@@ -95,6 +103,33 @@ public class TrackedRepoService {
         } catch (DataIntegrityViolationException e) {
             throw alreadyRegistered(repo);
         }
+    }
+
+    /**
+     * 같은 팀에 이름은 같지만 GitHub 레포 ID가 다른 활성 등록이 있으면, GitHub에서 삭제 후 같은 이름으로 다시 만든 레포의
+     * 옛 등록이다. 수집 때 자동으로 정리하는 것과 같이 비활성화하고 미발송 배치를 버린다.
+     *
+     * @return 정리한 등록이 있으면 true
+     */
+    private boolean cleanUpStaleSameName(Team team, GitHubRepo repo) {
+        boolean cleaned = false;
+        for (TrackedRepo stale : trackedRepoRepository.findAllByTeamIdAndActiveTrueOrderByIdAsc(team.getId())) {
+            if (!stale.getFullName().equalsIgnoreCase(repo.fullName()) || stale.getGithubRepoId().equals(repo.id())) {
+                continue;
+            }
+            OptionalInt discarded = deactivator.deactivate(stale.getId(), clock.instant());
+            if (discarded.isEmpty()) {
+                continue;
+            }
+            cleaned = true;
+            StringBuilder detail = new StringBuilder("레포: ").append(stale.getFullName())
+                    .append("\n사유: 같은 이름의 새 레포가 등록돼 이전 등록을 정리했어요 (GitHub에서 삭제 후 다시 만들어진 레포)");
+            if (discarded.getAsInt() > 0) {
+                detail.append("\n아직 보내지 않은 변경 ").append(discarded.getAsInt()).append("건은 보내지 않아요.");
+            }
+            opsNotifier.notify(new OpsEvent(OpsEvent.Type.REPO_DEACTIVATED, team.getName(), null, detail.toString()));
+        }
+        return cleaned;
     }
 
     private RepoRegistration reactivate(Team team, TrackedRepo registered, GitHubRepo repo, Long installationId,

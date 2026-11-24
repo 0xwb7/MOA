@@ -4,12 +4,18 @@ import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 
 /**
  * @param previousTeamName MOVED일 때 레포가 있던 팀 이름. 그 외에는 null
+ * @param cleanedUpStale   같은 팀에 이름은 같지만 GitHub 레포 ID가 다른 이전 등록(삭제 후 재생성된 레포)을 정리했는지
  */
 public record RepoRegistration(
         TrackedRepo repo,
         Kind kind,
-        String previousTeamName
+        String previousTeamName,
+        boolean cleanedUpStale
 ) {
+
+    public RepoRegistration(TrackedRepo repo, Kind kind, String previousTeamName) {
+        this(repo, kind, previousTeamName, false);
+    }
 
     public enum Kind {
         NEW,          // 처음 등록
@@ -20,5 +26,9 @@ public record RepoRegistration(
 
     public static RepoRegistration of(TrackedRepo repo, Kind kind) {
         return new RepoRegistration(repo, kind, null);
+    }
+
+    public RepoRegistration withCleanedUpStale(boolean cleanedUpStale) {
+        return new RepoRegistration(repo, kind, previousTeamName, cleanedUpStale);
     }
 }

@@ -44,6 +44,7 @@ import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
@@ -109,7 +110,8 @@ class TrackedRepoLifecycleTest {
         otherApp = trackedRepoRepository.save(new TrackedRepo(otherTeam, 3L, "team2/app", "main", OLD_CURSOR, INSTALLATION_ID));
         service = new TrackedRepoService(trackedRepoRepository, teamRepository, gitHubClient, opsNotifier, deactivator, clock,
                 "https://github.com/apps/moa-test/installations/new");
-        collector = new ChangeCollector(gitHubClient, trackedRepoRepository, teamRepository, changeBatchWriter, new TeamLocks());
+        collector = new ChangeCollector(gitHubClient, trackedRepoRepository, teamRepository, changeBatchWriter, new TeamLocks(),
+                deactivator, opsNotifier);
     }
 
     @AfterEach
@@ -297,6 +299,64 @@ class TrackedRepoLifecycleTest {
     }
 
     @Test
+    void 삭제_후_같은_이름으로_다시_만든_레포를_등록하면_이전_등록을_정리한다() {
+        ChangeBatch leftover = batch(backend, ChangeBatchStatus.COLLECTED, 2);
+        ChangeBatch prepared = batch(backend, ChangeBatchStatus.PREPARED, 1);
+        givenInstalled("team1", "backend", 50L, INSTALLATION_ID);   // 새 레포는 GitHub ID가 다르다
+
+        RepoRegistration registration = service.register(CHANNEL_ID, "https://github.com/team1/backend");
+
+        assertThat(registration.kind()).isEqualTo(RepoRegistration.Kind.NEW);
+        assertThat(registration.cleanedUpStale()).isTrue();
+        assertThat(registration.repo().getGithubRepoId()).isEqualTo(50L);
+        TrackedRepo old = reload(backend);
+        assertThat(old.isActive()).isFalse();
+        assertThat(old.getDeactivatedAt()).isEqualTo(NOW);
+        assertThat(status(leftover)).isEqualTo(ChangeBatchStatus.DISCARDED);
+        assertThat(status(prepared)).isEqualTo(ChangeBatchStatus.PREPARED);
+        assertThat(service.listActive(CHANNEL_ID).repos()).extracting(TrackedRepo::getGithubRepoId)
+                .containsExactlyInAnyOrder(2L, 50L);
+
+        ArgumentCaptor<OpsEvent> captor = ArgumentCaptor.forClass(OpsEvent.class);
+        verify(opsNotifier).notify(captor.capture());
+        assertThat(captor.getValue().type()).isEqualTo(OpsEvent.Type.REPO_DEACTIVATED);
+        assertThat(captor.getValue().teamName()).isEqualTo("1팀");
+        assertThat(captor.getValue().detail()).contains("team1/backend", "이전 등록을 정리했어요", "변경 2건은 보내지 않아요");
+    }
+
+    @Test
+    void 같은_레포를_다시_등록하거나_다른_팀의_같은_이름_레포는_정리하지_않는다() {
+        givenInstalled("team1", "backend", 1L, INSTALLATION_ID);
+        RepoRegistration refreshed = service.register(CHANNEL_ID, "https://github.com/team1/backend");
+        assertThat(refreshed.kind()).isEqualTo(RepoRegistration.Kind.REFRESHED);
+        assertThat(refreshed.cleanedUpStale()).isFalse();
+
+        givenInstalled("team2", "app", 60L, INSTALLATION_ID);   // 2팀의 team2/app과 이름만 같은 새 레포
+        RepoRegistration other = service.register(CHANNEL_ID, "https://github.com/team2/app");
+        assertThat(other.cleanedUpStale()).isFalse();
+        assertThat(reload(otherApp).isActive()).isTrue();   // 다른 팀 것은 그 팀의 다음 수집 때 정리된다
+        verify(opsNotifier, never()).notify(any());
+    }
+
+    @Test
+    void 수집할_때_레포_ID가_다르면_그_레코드를_해제하고_미발송_배치를_버린다() {
+        ChangeBatch leftover = batch(frontend, ChangeBatchStatus.COLLECTED, 1);
+        givenHead("team1", "backend", OLD_CURSOR);
+        given(gitHubClient.findRepo(INSTALLATION_ID, "team1", "frontend"))
+                .willReturn(Optional.of(new GitHubRepo(70L, "team1/frontend", "main")));
+
+        List<RepoCollectResult> results = collector.collectTeam(team.getId());
+
+        assertThat(results).extracting(RepoCollectResult::repoFullName, RepoCollectResult::outcome).containsExactly(
+                tuple("team1/backend", RepoCollectResult.Outcome.NO_CHANGE),
+                tuple("team1/frontend", RepoCollectResult.Outcome.DEACTIVATED));
+        assertThat(reload(frontend).isActive()).isFalse();
+        assertThat(status(leftover)).isEqualTo(ChangeBatchStatus.DISCARDED);
+        verify(gitHubClient, never()).findHeadSha(any(), eq("team1"), eq("frontend"), any());
+        verify(opsNotifier).notify(any(OpsEvent.class));
+    }
+
+    @Test
     void 활성_레포를_다른_팀이_등록하면_거절한다() {
         givenInstalled("team1", "backend", 1L, INSTALLATION_ID);
 
@@ -343,6 +403,11 @@ class TrackedRepoLifecycleTest {
     }
 
     private void givenHead(String owner, String name, String sha) {
+        String fullName = owner + "/" + name;
+        Long githubRepoId = java.util.stream.Stream.of(backend, frontend, otherApp)
+                .filter(repo -> repo.getFullName().equals(fullName)).findFirst().orElseThrow().getGithubRepoId();
+        given(gitHubClient.findRepo(INSTALLATION_ID, owner, name))
+                .willReturn(Optional.of(new GitHubRepo(githubRepoId, fullName, "main")));
         given(gitHubClient.findHeadSha(INSTALLATION_ID, owner, name, "main")).willReturn(Optional.of(sha));
     }
 

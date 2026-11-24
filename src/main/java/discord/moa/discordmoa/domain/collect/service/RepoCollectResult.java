@@ -9,11 +9,12 @@ public record RepoCollectResult(
         int fileCount,
         boolean forcePushDetected,
         boolean truncated,
-        String failureReason    // FAILED일 때만. 사용자에게 보여줄 원인
+        String failureReason    // FAILED·DEACTIVATED일 때만. 사용자에게 보여줄 원인
 ) {
 
     public enum Outcome {
-        COLLECTED, NO_CHANGE, FAILED
+        COLLECTED, NO_CHANGE, FAILED,
+        DEACTIVATED   // GitHub에서 레포가 사라졌거나 같은 이름의 다른 레포라 등록을 해제함 (운영 알림은 따로 보냄)
     }
 
     static RepoCollectResult collected(String repoFullName, ChangeBatch batch) {
@@ -24,6 +25,10 @@ public record RepoCollectResult(
 
     static RepoCollectResult noChange(String repoFullName) {
         return new RepoCollectResult(repoFullName, Outcome.NO_CHANGE, 0, 0, false, false, null);
+    }
+
+    static RepoCollectResult deactivated(String repoFullName, String reason) {
+        return new RepoCollectResult(repoFullName, Outcome.DEACTIVATED, 0, 0, false, false, reason);
     }
 
     static RepoCollectResult failed(String repoFullName, String failureReason) {

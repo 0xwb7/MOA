@@ -9,7 +9,10 @@ import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.domain.team.repository.TeamRepository;
 import discord.moa.discordmoa.domain.team.repository.TrackedRepoRepository;
 import discord.moa.discordmoa.domain.team.service.TeamBusyException;
+import discord.moa.discordmoa.domain.ops.OpsEvent;
+import discord.moa.discordmoa.domain.ops.OpsNotifier;
 import discord.moa.discordmoa.domain.team.service.TeamLocks;
+import discord.moa.discordmoa.domain.team.service.TrackedRepoDeactivator;
 import discord.moa.discordmoa.support.TeamLockHolder;
 import discord.moa.discordmoa.github.client.GitHubClient;
 import discord.moa.discordmoa.github.client.GitHubInstallationGoneException;
@@ -17,25 +20,31 @@ import discord.moa.discordmoa.github.dto.GitHubCommit;
 import discord.moa.discordmoa.github.dto.GitHubCommitPage;
 import discord.moa.discordmoa.github.dto.GitHubCompare;
 import discord.moa.discordmoa.github.dto.GitHubFile;
+import discord.moa.discordmoa.github.dto.GitHubRepo;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.RestClientException;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,6 +55,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -68,6 +78,13 @@ class ChangeCollectorTest {
     private TeamRepository teamRepository;
     @Mock
     private ChangeBatchRepository changeBatchRepository;
+    @Mock
+    private TrackedRepoDeactivator deactivator;
+    @Mock
+    private OpsNotifier opsNotifier;
+
+    // GitHub가 돌려줄 레포 ID (owner/name → ID). repo(...)로 만든 레포는 등록 때와 같은 ID로 응답한다
+    private final Map<String, Long> githubRepoIds = new HashMap<>();
 
     private final TeamLocks teamLocks = new TeamLocks();
     private ChangeCollector collector;
@@ -76,7 +93,12 @@ class ChangeCollectorTest {
     @BeforeEach
     void setUp() {
         ChangeBatchWriter writer = new ChangeBatchWriter(changeBatchRepository, trackedRepoRepository);
-        collector = new ChangeCollector(gitHubClient, trackedRepoRepository, teamRepository, writer, teamLocks);
+        collector = new ChangeCollector(gitHubClient, trackedRepoRepository, teamRepository, writer, teamLocks,
+                deactivator, opsNotifier);
+        lenient().when(gitHubClient.findRepo(any(), anyString(), anyString())).thenAnswer(inv -> {
+            String fullName = inv.getArgument(1) + "/" + inv.getArgument(2);
+            return Optional.ofNullable(githubRepoIds.get(fullName)).map(id -> new GitHubRepo(id, fullName, "main"));
+        });
         team = new Team("모아팀", 100L, 1L);
         ReflectionTestUtils.setField(team, "id", 10L);
     }
@@ -459,6 +481,98 @@ class ChangeCollectorTest {
                 .isEqualTo(ChangeCollector.GITHUB_UNREACHABLE);
     }
 
+    // ---- GitHub에서 레포 삭제·재생성 ----
+
+    @Test
+    void 레포_ID가_등록_때와_다르면_수집하지_않고_등록을_해제하고_알린다() {
+        TrackedRepo repo = repo(1L, "owner/app", BASE);
+        githubRepoIds.put("owner/app", 999L);   // 삭제 후 같은 이름으로 다시 만든 레포
+        given(trackedRepoRepository.findAllByTeamIdAndActiveTrueOrderByIdAsc(10L)).willReturn(List.of(repo));
+        given(deactivator.deactivate(eq(1L), any(Instant.class))).willReturn(OptionalInt.of(4));
+        given(teamRepository.findById(10L)).willReturn(Optional.of(team));
+
+        List<RepoCollectResult> results = collector.collectTeam(10L);
+
+        assertThat(results).containsExactly(new RepoCollectResult("owner/app", RepoCollectResult.Outcome.DEACTIVATED,
+                0, 0, false, false, ChangeCollector.REPO_REPLACED));
+        verify(gitHubClient, never()).findHeadSha(any(), anyString(), anyString(), anyString());
+        verify(gitHubClient, never()).compare(any(), anyString(), anyString(), anyString(), anyString());
+        verify(gitHubClient, never()).listCommits(any(), anyString(), anyString(), anyString(), anyInt());
+        verifyNoInteractions(changeBatchRepository);
+        verify(trackedRepoRepository, never()).markCollected(any(), any());
+
+        ArgumentCaptor<OpsEvent> event = ArgumentCaptor.forClass(OpsEvent.class);
+        verify(opsNotifier).notify(event.capture());
+        assertThat(event.getValue().type()).isEqualTo(OpsEvent.Type.REPO_DEACTIVATED);
+        assertThat(event.getValue().teamName()).isEqualTo("모아팀");
+        assertThat(event.getValue().detail()).contains("레포: owner/app",
+                "GitHub에서 레포가 삭제됐거나 같은 이름으로 다시 만들어졌어요. 팀 채팅방에서 /레포등록을 다시 해주세요.",
+                "아직 보내지 않은 변경 4건은 보내지 않아요.");
+    }
+
+    @Test
+    void 레포_자체가_404면_삭제된_것으로_보고_등록을_해제한다() {
+        TrackedRepo repo = repo(1L, "owner/app", BASE);
+        githubRepoIds.remove("owner/app");
+        given(trackedRepoRepository.findAllByTeamIdAndActiveTrueOrderByIdAsc(10L)).willReturn(List.of(repo));
+        given(deactivator.deactivate(eq(1L), any(Instant.class))).willReturn(OptionalInt.of(0));
+        given(teamRepository.findById(10L)).willReturn(Optional.of(team));
+
+        assertThat(collector.collectTeam(10L)).singleElement().satisfies(result -> {
+            assertThat(result.outcome()).isEqualTo(RepoCollectResult.Outcome.DEACTIVATED);
+            assertThat(result.failureReason()).isEqualTo(ChangeCollector.REPO_NOT_FOUND);
+        });
+        verify(gitHubClient, never()).findHeadSha(any(), anyString(), anyString(), anyString());
+        ArgumentCaptor<OpsEvent> event = ArgumentCaptor.forClass(OpsEvent.class);
+        verify(opsNotifier).notify(event.capture());
+        assertThat(event.getValue().detail()).doesNotContain("보내지 않아요");   // 버린 변경이 없으면 쓰지 않는다
+    }
+
+    @Test
+    void 이미_다른_경로에서_해제됐으면_알림을_다시_보내지_않는다() {
+        TrackedRepo repo = repo(1L, "owner/app", BASE);
+        githubRepoIds.remove("owner/app");
+        given(trackedRepoRepository.findAllByTeamIdAndActiveTrueOrderByIdAsc(10L)).willReturn(List.of(repo));
+        given(deactivator.deactivate(eq(1L), any(Instant.class))).willReturn(OptionalInt.empty());
+
+        assertThat(collector.collectTeam(10L)).singleElement()
+                .extracting(RepoCollectResult::outcome).isEqualTo(RepoCollectResult.Outcome.DEACTIVATED);
+        verifyNoInteractions(opsNotifier);
+    }
+
+    @Test
+    void 레포를_확인한_뒤의_compare_404는_레포_삭제가_아니라_force_push로_처리한다() {
+        TrackedRepo repo = repo(1L, "owner/app", BASE);
+        given(trackedRepoRepository.findAllByTeamIdAndActiveTrueOrderByIdAsc(10L)).willReturn(List.of(repo));
+        givenHead("owner", "app", HEAD);
+        given(gitHubClient.compare(INSTALLATION_ID, "owner", "app", BASE, HEAD)).willReturn(Optional.empty());
+        givenRecentCommits();
+        givenSaveSucceeds();
+        given(trackedRepoRepository.advanceCursor(1L, BASE, HEAD)).willReturn(1);
+
+        assertThat(collector.collectTeam(10L)).singleElement().satisfies(result -> {
+            assertThat(result.outcome()).isEqualTo(RepoCollectResult.Outcome.COLLECTED);
+            assertThat(result.forcePushDetected()).isTrue();
+        });
+        verifyNoInteractions(deactivator, opsNotifier);
+    }
+
+    @Test
+    void 레포_확인이_네트워크_오류나_5xx면_등록을_해제하지_않고_수집_실패로만_둔다() {
+        TrackedRepo timeout = repo(1L, "owner/timeout", BASE);
+        TrackedRepo serverError = repo(2L, "owner/error", BASE);
+        given(trackedRepoRepository.findAllByTeamIdAndActiveTrueOrderByIdAsc(10L)).willReturn(List.of(timeout, serverError));
+        given(gitHubClient.findRepo(INSTALLATION_ID, "owner", "timeout")).willThrow(new ResourceAccessException("Read timed out"));
+        given(gitHubClient.findRepo(INSTALLATION_ID, "owner", "error"))
+                .willThrow(HttpServerErrorException.create(HttpStatus.BAD_GATEWAY, "Bad Gateway", HttpHeaders.EMPTY,
+                        new byte[0], StandardCharsets.UTF_8));
+
+        assertThat(collector.collectTeam(10L)).extracting(RepoCollectResult::outcome, RepoCollectResult::failureReason)
+                .containsExactly(tuple(RepoCollectResult.Outcome.FAILED, ChangeCollector.GITHUB_UNREACHABLE),
+                        tuple(RepoCollectResult.Outcome.FAILED, ChangeCollector.UNKNOWN_FAILURE));
+        verifyNoInteractions(deactivator, opsNotifier);
+    }
+
     // ---- fixtures ----
 
     private static GitHubInstallationGoneException gone() {
@@ -473,6 +587,7 @@ class ChangeCollectorTest {
     private TrackedRepo repo(Long id, String fullName, String lastProcessedSha) {
         TrackedRepo repo = new TrackedRepo(team, id * 100, fullName, "main", lastProcessedSha, INSTALLATION_ID);
         ReflectionTestUtils.setField(repo, "id", id);
+        githubRepoIds.put(fullName, id * 100);
         return repo;
     }
 
