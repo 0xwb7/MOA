@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# 서버 위치: /opt/moa/deploy.sh   (SSM이 root로 실행)
+# 사용법: /opt/moa/deploy.sh <이미지 태그(커밋 SHA)>
+# 새 버전이 45초 안에 죽거나 재시작 루프에 빠지면 직전 태그로 자동 롤백한다.
 set -euo pipefail
 
 TAG=${1:?사용법: deploy.sh <이미지 태그>}
@@ -16,8 +19,9 @@ PREV=$(cat "$STATE/current_tag" 2>/dev/null || true)
 
 run_tag() {
   export MOA_TAG=$1
-  "${COMPOSE[@]}" pull app
-  "${COMPOSE[@]}" up -d mysql
+  "${COMPOSE[@]}" pull --quiet app
+  # --no-deps로 app을 띄우면 depends_on(healthy) 대기가 무시된다. 그래서 MySQL이 healthy가 될 때까지 여기서 기다린다
+  "${COMPOSE[@]}" up -d --wait --wait-timeout 120 mysql
   "${COMPOSE[@]}" up -d --no-deps app
 }
 
@@ -50,4 +54,4 @@ if [[ -n $PREV ]]; then
   run_tag "$PREV"
   healthy && echo "== 롤백 완료 ==" || echo "== 롤백 버전도 비정상. 수동 확인 필요 =="
 fi
-exit 1
+exit
