@@ -4,6 +4,7 @@ import discord.moa.discordmoa.discord.ops.DiscordOpsNotifier;
 import discord.moa.discordmoa.domain.account.service.AccountLinkService;
 import discord.moa.discordmoa.domain.collect.service.ChangeCollector;
 import discord.moa.discordmoa.domain.digest.service.DigestService;
+import discord.moa.discordmoa.domain.guide.service.UsageGuideService;
 import discord.moa.discordmoa.domain.summary.service.ChangeSummarizer;
 import discord.moa.discordmoa.domain.team.service.TeamRegistration;
 import discord.moa.discordmoa.domain.team.service.TeamService;
@@ -42,7 +43,8 @@ class TeamRegisterCommandTest {
     private final TeamService teamService = mock(TeamService.class);
     private final SlashCommandListener listener = new SlashCommandListener(mock(AccountLinkService.class), teamService,
             mock(TrackedRepoService.class), mock(ChangeCollector.class), mock(DigestService.class),
-            mock(ChangeSummarizer.class), mock(DiscordOpsNotifier.class), mock(ExecutorService.class));
+            mock(ChangeSummarizer.class), mock(DiscordOpsNotifier.class), mock(UsageGuideService.class),
+            mock(ExecutorService.class));
 
     private final SlashCommandInteractionEvent event = mock(SlashCommandInteractionEvent.class);
     private final Guild guild = mock(Guild.class);

@@ -5,6 +5,7 @@ discord:
   ask-button-enabled: ${DISCORD_ASK_BUTTON_ENABLED:false}           # 발송 항목에 "개발자에게 질문하기" 버튼을 붙일지
   ops-channel-id: ${DISCORD_OPS_CHANNEL_ID:}   # 운영진 장애 알림 채널. 비우면 서버 로그로만 남김
   ops-role-id: ${DISCORD_OPS_ROLE_ID:}         # 선택. 🔴 실패 알림에서만 이 역할을 멘션
+  guide-url: ${DISCORD_GUIDE_URL:https://app.notion.com/p/MOA-4228bf43d42e80efa0b8f02339b20b32?source=copy_link}   # /사용법 마지막 줄의 자세한 사용법 링크. 환경 변수를 빈 값으로 주면 그 줄을 뺌
 
 spring:
   datasource:

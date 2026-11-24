@@ -20,6 +20,8 @@ public class CommandRegistrar {
                 .addCommands(
                         Commands.slash("ping", "봇 상태 확인"),
 
+                        Commands.slash("사용법", "MOA 사용법과 내 설정 상태를 보여줘요"),
+
                         Commands.slash("연동", "GitHub 계정을 연동해요")
                                 .addOption(OptionType.STRING, "github", "GitHub 아이디", true),
 

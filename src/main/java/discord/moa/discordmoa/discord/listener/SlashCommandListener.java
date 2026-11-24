@@ -11,6 +11,7 @@ import discord.moa.discordmoa.domain.digest.service.DigestSendResult;
 import discord.moa.discordmoa.domain.digest.service.CycleStatus;
 import discord.moa.discordmoa.domain.digest.service.DigestService;
 import discord.moa.discordmoa.domain.digest.service.ManualSendResult;
+import discord.moa.discordmoa.domain.guide.service.UsageGuideService;
 import discord.moa.discordmoa.domain.summary.service.ChangeSummarizer;
 import discord.moa.discordmoa.domain.summary.service.SummaryPreview;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
@@ -48,6 +49,7 @@ public class SlashCommandListener extends ListenerAdapter {
     private final DigestService digestService;
     private final ChangeSummarizer changeSummarizer;
     private final DiscordOpsNotifier opsNotifier;
+    private final UsageGuideService usageGuideService;
 
     // GitHub·LLM 호출은 오래 걸릴 수 있어서 JDA 이벤트 스레드를 막지 않도록 따로 실행한다
     private final ExecutorService longTasks;
@@ -55,7 +57,7 @@ public class SlashCommandListener extends ListenerAdapter {
     public SlashCommandListener(AccountLinkService accountLinkService, TeamService teamService,
                                 TrackedRepoService trackedRepoService, ChangeCollector changeCollector,
                                 DigestService digestService, ChangeSummarizer changeSummarizer,
-                                DiscordOpsNotifier opsNotifier,
+                                DiscordOpsNotifier opsNotifier, UsageGuideService usageGuideService,
                                 @Qualifier(DiscordTaskConfig.DISCORD_TASK_EXECUTOR) ExecutorService longTasks) {
         this.accountLinkService = accountLinkService;
         this.teamService = teamService;
@@ -64,6 +66,7 @@ public class SlashCommandListener extends ListenerAdapter {
         this.digestService = digestService;
         this.changeSummarizer = changeSummarizer;
         this.opsNotifier = opsNotifier;
+        this.usageGuideService = usageGuideService;
         this.longTasks = longTasks;
     }
 
@@ -71,6 +74,7 @@ public class SlashCommandListener extends ListenerAdapter {
     public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
         switch (event.getName()) {
             case "ping" -> handlePing(event);
+            case "사용법" -> handleUsage(event);
             case "연동" -> handleLink(event);
             case "팀등록" -> handleTeamRegister(event);
             case "레포등록" -> handleRepoRegister(event);
@@ -87,6 +91,21 @@ public class SlashCommandListener extends ListenerAdapter {
 
     private void handlePing(SlashCommandInteractionEvent event) {
         event.reply("pong").setEphemeral(true).queue();
+    }
+
+    /**
+     * 누구나, 아무 채널에서. DB만 읽으므로 이벤트 스레드에서 바로 답한다.
+     */
+    private void handleUsage(SlashCommandInteractionEvent event) {
+        long channelId = event.getChannel().getIdLong();
+        long userId = event.getUser().getIdLong();
+        try {
+            event.reply(UsageGuideMessage.format(usageGuideService.build(channelId, userId)))
+                    .setEphemeral(true).setAllowedMentions(List.of()).queue();
+        } catch (RuntimeException e) {
+            log.error("사용법 안내 중 오류: channelId={}, userId={}", channelId, userId, e);
+            event.reply(UNEXPECTED_ERROR).setEphemeral(true).queue();
+        }
     }
 
     private void handleLink(SlashCommandInteractionEvent event) {

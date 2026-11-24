@@ -20,6 +20,8 @@ public interface TrackedRepoRepository extends JpaRepository<TrackedRepo, Long> 
     // 비활성(/레포해제) 레포는 수집·정기 회차·목록에서 빠진다
     boolean existsByTeamIdAndActiveTrue(Long teamId);
 
+    long countByTeamIdAndActiveTrue(Long teamId);
+
     List<TrackedRepo> findAllByTeamIdAndActiveTrueOrderByIdAsc(Long teamId);
 
     @EntityGraph(attributePaths = "team")
