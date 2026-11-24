@@ -187,7 +187,7 @@ class SummaryInputBuilderTest {
     private static final PreviousItem P12 = new PreviousItem(12L, Instant.parse("2026-11-23T00:00:00Z"),
             SummaryStatus.PARTIAL, "로그인 서버 기능이 준비됐어요 (화면 연결 전)");
     private static final PreviousItem P15 = new PreviousItem(15L, Instant.parse("2026-11-23T12:00:00Z"),
-            SummaryStatus.READY, "회원가입을 직접 써볼 수 있어요");
+            SummaryStatus.READY, "회원가입 기능이 완성됐어요");
     private static final PreviousItem P18 = new PreviousItem(18L, Instant.parse("2026-11-24T00:00:00Z"),
             SummaryStatus.PARTIAL, "비밀번호 찾기 화면이 생겼어요 (서버는 아직이에요)");
 
@@ -200,7 +200,7 @@ class SummaryInputBuilderTest {
         assertThat(input.text()).startsWith("""
                 ## 이전에 PM에게 이미 보고한 기능 (참고용. 이번 변경 아님)
                 - [P12] 11-23 09:00 🟡 로그인 서버 기능이 준비됐어요 (화면 연결 전)
-                - [P15] 11-23 21:00 🟢 회원가입을 직접 써볼 수 있어요
+                - [P15] 11-23 21:00 🟢 회원가입 기능이 완성됐어요
 
                 # 레포: team1/frontend
                 """);

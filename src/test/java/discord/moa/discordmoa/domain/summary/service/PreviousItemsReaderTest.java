@@ -77,7 +77,7 @@ class PreviousItemsReaderTest {
     void 발송된_LLM_회차의_READY와_PARTIAL_항목만_오래된_순으로_읽는다() {
         Digest sent = digest(team, hoursAgo(24), DigestType.LLM, DigestStatus.SENT);
         DigestItem login = item(sent, repo, SummaryStatus.PARTIAL, "로그인 서버 기능이 준비됐어요 (화면 연결 전)");
-        DigestItem signup = item(sent, repo, SummaryStatus.READY, "회원가입을 직접 써볼 수 있어요");
+        DigestItem signup = item(sent, repo, SummaryStatus.READY, "회원가입 기능이 완성됐어요");
         item(sent, repo, SummaryStatus.INTERNAL, "코드 정리");                                    // INTERNAL 제외
         DigestItem fallback = digestItemRepository.save(new DigestItem(
                 digest(team, hoursAgo(12), DigestType.FALLBACK, DigestStatus.SENT), repo, "📦 커밋 목록", List.of("a")));
@@ -147,7 +147,7 @@ class PreviousItemsReaderTest {
         DigestItem other = item(digest(team, hoursAgo(24 + 1), DigestType.LLM, DigestStatus.SENT), repo,
                 SummaryStatus.PARTIAL, "회원가입 서버 기능이 준비됐어요 (화면 연결 전)");
         DigestItem p20 = related(digest(team, hoursAgo(12), DigestType.LLM, DigestStatus.SENT), repo,
-                "로그인을 직접 써볼 수 있어요", p12);
+                "로그인 기능이 완성됐어요", p12);
 
         List<PreviousItem> items = reader(SummaryProperties.PreviousItems.DEFAULT).read(team.getId());
 

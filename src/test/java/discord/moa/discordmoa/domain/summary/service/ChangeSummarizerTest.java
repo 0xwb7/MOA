@@ -97,7 +97,7 @@ class ChangeSummarizerTest {
         given(openAiClient.createResponse(any())).willReturn(response("""
                 {"items":[
                   {"status":"INTERNAL","title":"코드 검사 설정","commitShas":["%s"]},
-                  {"status":"READY","title":"로그인 기능을 써 볼 수 있어요","commitShas":["%s","%s"]}
+                  {"status":"READY","title":"로그인 기능이 완성됐어요","commitShas":["%s","%s"]}
                 ]}""".formatted(sha('c'), sha('a'), sha('b'))));
 
         SummaryResult result = summarizer(40, 1_000_000).summarize(TEAM_ID, LlmCallPurpose.DIGEST);
@@ -161,7 +161,7 @@ class ChangeSummarizerTest {
         given(previousItemsReader.read(TEAM_ID)).willReturn(List.of(new PreviousItem(12L,
                 Instant.parse("2026-11-19T12:00:00Z"), SummaryStatus.PARTIAL, "로그인 서버 기능이 준비됐어요 (화면 연결 전)")));
         given(openAiClient.createResponse(any())).willReturn(response("""
-                {"items":[{"status":"READY","title":"로그인을 직접 써볼 수 있어요","commitShas":["%s","%s"],"relatedPreviousItemId":12}]}"""
+                {"items":[{"status":"READY","title":"로그인 기능이 완성됐어요","commitShas":["%s","%s"],"relatedPreviousItemId":12}]}"""
                 .formatted(sha('a'), sha('b'))));
 
         SummaryResult result = summarizer(properties("v2", 60_000, 40, 1_000_000)).summarize(TEAM_ID, LlmCallPurpose.DIGEST);

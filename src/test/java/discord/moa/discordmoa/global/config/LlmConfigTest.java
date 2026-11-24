@@ -41,7 +41,7 @@ class LlmConfigTest {
             assertThat(openAi.baseUrl()).isEqualTo("https://api.openai.com/v1");
 
             SummaryProperties summary = context.getBean(SummaryProperties.class);
-            assertThat(summary.promptVersion()).isEqualTo("v2");
+            assertThat(summary.promptVersion()).isEqualTo("v3");
             assertThat(summary.previousItems()).isEqualTo(new SummaryProperties.PreviousItems(14, 30));
             assertThat(summary.maxInputChars()).isEqualTo(60_000);
             assertThat(summary.zone()).isEqualTo(ZoneId.of("Asia/Seoul"));
@@ -52,7 +52,11 @@ class LlmConfigTest {
             assertThat(summary.excludedFiles()).contains("**/.env", "**/*.pem");
             assertThat(summary.patchOmittedFiles()).contains("**/package-lock.json", "**/node_modules/**");
 
-            assertThat(context.getBean(SummaryPrompt.class).text()).startsWith("너는 해커톤 팀의");
+            assertThat(context.getBean(SummaryPrompt.class).text()).startsWith("너는 해커톤 팀의")
+                    .contains("화면(프론트엔드)과 서버(백엔드)가 연결돼 기능이 완성된 것")
+                    .contains("\"바로 써 보세요\", \"사용해 보세요\"")
+                    .doesNotContain("써 볼 수 있는 기능", "써 볼 수는 없다", "직접 써 볼 수 있어요");
+            assertThat(context.getBean(SummaryPrompt.class).usesPreviousItems()).isTrue();
             assertThat(context.getBean(OpenAiClient.class).isConfigured()).isFalse();
         });
     }

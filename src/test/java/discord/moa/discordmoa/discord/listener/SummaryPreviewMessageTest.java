@@ -19,7 +19,7 @@ class SummaryPreviewMessageTest {
     @Test
     void 항목을_보여주고_통계는_보여주지_않는다() {
         SummaryResult result = SummaryResult.success(List.of(1L), List.of(
-                new SummaryItem(SummaryStatus.READY, "로그인 기능을 써 볼 수 있어요", List.of("a", "b")),
+                new SummaryItem(SummaryStatus.READY, "로그인 기능이 완성됐어요", List.of("a", "b")),
                 new SummaryItem(SummaryStatus.INTERNAL, "내부 작업", List.of("c"))), STATS);
 
         String text = SummaryPreviewMessage.format(new SummaryPreview("1팀", result));
@@ -27,7 +27,7 @@ class SummaryPreviewMessageTest {
         assertThat(text).isEqualTo("""
                 🔎 '1팀' 요약 미리보기 (발송·상태 변경 없음)
 
-                🟢 로그인 기능을 써 볼 수 있어요 (커밋 2개)
+                🟢 로그인 기능이 완성됐어요 (커밋 2개)
                 ⚪ 내부 작업 (커밋 1개)
                 """);
     }
@@ -35,11 +35,11 @@ class SummaryPreviewMessageTest {
     @Test
     void 이전_항목에서_이어진_항목은_운영진에게_표시한다() {
         SummaryResult result = SummaryResult.success(List.of(1L), List.of(
-                new SummaryItem(SummaryStatus.READY, "로그인을 직접 써볼 수 있어요", List.of("a"), 12L),
+                new SummaryItem(SummaryStatus.READY, "로그인 기능이 완성됐어요", List.of("a"), 12L),
                 new SummaryItem(SummaryStatus.PARTIAL, "회원가입 서버 준비", List.of("b"))), STATS);
 
         assertThat(SummaryPreviewMessage.format(new SummaryPreview("1팀", result)))
-                .contains("🟢 로그인을 직접 써볼 수 있어요 (커밋 1개)\n   ↗ 이전 항목 #12에서 이어짐\n🟡 회원가입 서버 준비 (커밋 1개)\n");
+                .contains("🟢 로그인 기능이 완성됐어요 (커밋 1개)\n   ↗ 이전 항목 #12에서 이어짐\n🟡 회원가입 서버 준비 (커밋 1개)\n");
     }
 
     @Test

@@ -590,7 +590,7 @@ class DigestCycleTest {
     @Test
     void LLM_요약이_성공하면_운영_알림이_없다() {
         collected(backend, "로그인 API 추가");
-        givenSummaryLlm(new SummaryStatus[]{SummaryStatus.READY}, "로그인 기능을 써 볼 수 있어요");
+        givenSummaryLlm(new SummaryStatus[]{SummaryStatus.READY}, "로그인 기능이 완성됐어요");
 
         preparer.prepareCycle(CYCLE);
 
@@ -604,16 +604,16 @@ class DigestCycleTest {
     void LLM_항목은_상태_제목_이전_항목_ID를_함께_저장한다() {
         ChangeBatch login = collected(frontend, "로그인 화면");
         given(changeSummarizer.summarize(anyLong(), any())).willAnswer(inv -> SummaryResult.success(collectedIds(), List.of(
-                new SummaryItem(SummaryStatus.READY, "로그인을 직접 써볼 수 있어요", List.of(sha(login)), 77L),
+                new SummaryItem(SummaryStatus.READY, "로그인 기능이 완성됐어요", List.of(sha(login)), 77L),
                 new SummaryItem(SummaryStatus.INTERNAL, "코드 정리", List.of(sha(login)))), null));
 
         preparer.prepareCycle(CYCLE);
 
         List<DigestItem> saved = items(cycleDigest(CYCLE));
         assertThat(saved).extracting(DigestItem::getItemStatus).containsExactly(SummaryStatus.READY, SummaryStatus.INTERNAL);
-        assertThat(saved).extracting(DigestItem::getTitle).containsExactly("로그인을 직접 써볼 수 있어요", "코드 정리");
+        assertThat(saved).extracting(DigestItem::getTitle).containsExactly("로그인 기능이 완성됐어요", "코드 정리");
         assertThat(saved).extracting(DigestItem::getRelatedPreviousItemId).containsExactly(77L, null);
-        assertThat(saved.getFirst().getText()).isEqualTo("🟢 로그인을 직접 써볼 수 있어요");   // PM 메시지에는 이전 항목 표시 없음
+        assertThat(saved.getFirst().getText()).isEqualTo("🟢 로그인 기능이 완성됐어요");   // PM 메시지에는 이전 항목 표시 없음
     }
 
     @Test

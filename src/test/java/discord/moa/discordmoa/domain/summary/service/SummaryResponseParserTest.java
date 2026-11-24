@@ -21,12 +21,12 @@ class SummaryResponseParserTest {
     void 정상_응답을_항목으로_바꾼다() {
         List<SummaryItem> items = parser.parseItems("""
                 {"items":[
-                  {"status":"READY","title":"로그인 기능을 써 볼 수 있어요","commitShas":["%s","%s"]},
+                  {"status":"READY","title":"로그인 기능이 완성됐어요","commitShas":["%s","%s"]},
                   {"status":"PARTIAL","title":"회원가입은 서버만 준비됐어요","commitShas":["%s"]}
                 ]}""".formatted(sha('a'), sha('b'), sha('c')), KNOWN);
 
         assertThat(items).containsExactly(
-                new SummaryItem(SummaryStatus.READY, "로그인 기능을 써 볼 수 있어요", List.of(sha('a'), sha('b'))),
+                new SummaryItem(SummaryStatus.READY, "로그인 기능이 완성됐어요", List.of(sha('a'), sha('b'))),
                 new SummaryItem(SummaryStatus.PARTIAL, "회원가입은 서버만 준비됐어요", List.of(sha('c'))));
     }
 
@@ -50,7 +50,7 @@ class SummaryResponseParserTest {
     void 이전_항목_ID를_함께_받는다() {
         List<SummaryItem> items = parser.parseItems("""
                 {"items":[
-                  {"status":"READY","title":"로그인을 직접 써볼 수 있어요","commitShas":["%s"],"relatedPreviousItemId":12},
+                  {"status":"READY","title":"로그인 기능이 완성됐어요","commitShas":["%s"],"relatedPreviousItemId":12},
                   {"status":"PARTIAL","title":"회원가입 서버 준비","commitShas":["%s"],"relatedPreviousItemId":null}
                 ]}""".formatted(sha('a'), sha('b')), KNOWN, Set.of(12L, 15L));
 
@@ -60,7 +60,7 @@ class SummaryResponseParserTest {
     @Test
     void 입력에_없는_이전_항목_ID는_null로_바꾸고_요약은_성공한다() {
         List<SummaryItem> items = parser.parseItems("""
-                {"items":[{"status":"READY","title":"로그인을 직접 써볼 수 있어요","commitShas":["%s"],"relatedPreviousItemId":999}]}"""
+                {"items":[{"status":"READY","title":"로그인 기능이 완성됐어요","commitShas":["%s"],"relatedPreviousItemId":999}]}"""
                 .formatted(sha('a')), KNOWN, Set.of(12L));
 
         assertThat(items).singleElement().satisfies(item -> {

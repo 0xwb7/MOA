@@ -9,7 +9,7 @@ public class SummaryDigestFormatter {
 
     public String header(String teamName, Long pmDiscordUserId) {
         return "<@" + pmDiscordUserId + "> 지난 12시간 동안 '" + MarkdownSanitizer.escape(teamName) + "'에 이런 변경이 있었어요\n"
-                + "-# 🟢  바로 써 볼 수 있어요    🟡  일부만 됐어요    ⚪  내부 작업";
+                + "-# 🟢  기능 완성    🟡  일부만 됐어요    ⚪  내부 작업";
     }
 
     public String itemText(SummaryItem item) {
