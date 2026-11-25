@@ -209,7 +209,7 @@ public class DigestService {
         log.info("발송 완료: team={}, 회차={}, 유형={}, 항목 {}개", digest.teamName(), digest.scheduledFor(),
                 digest.type(), digest.items().size());
         return Optional.of(new DigestSendResult(digest.teamName(), digest.type(), true, digest.items().size(),
-                messageIds.size(), null, digest.fallbackReason()));
+                messageIds.size(), null, digest.fallbackReason(), digest.uncollectedRepos()));
     }
 
     private DigestSendResult fail(SendableDigest digest, List<DigestMessage> messages, List<Long> sentMessageIds,
@@ -222,7 +222,7 @@ public class DigestService {
         digestWriter.markFailed(digest.digestId(), messageIdByItemId(messages, sentMessageIds), failureReason);
         opsNotifier.notify(new OpsEvent(OpsEvent.Type.SEND_FAILED, digest.teamName(), digest.scheduledFor(), failureReason));
         return new DigestSendResult(digest.teamName(), digest.type(), false, digest.items().size(),
-                sentMessageIds.size(), failureReason, digest.fallbackReason());
+                sentMessageIds.size(), failureReason, digest.fallbackReason(), digest.uncollectedRepos());
     }
 
     private List<DigestMessage> toMessages(SendableDigest digest) {
@@ -232,7 +232,7 @@ public class DigestService {
         List<DigestMessagePlanner.PlannedItem> items = digest.items().stream()
                 .map(item -> new DigestMessagePlanner.PlannedItem(item.itemId(), item.text()))
                 .toList();
-        return planner.plan(digest.headerText(), digest.mentionUserId(), items);
+        return planner.plan(digest.headerText(), digest.mentionUserId(), items, digest.footer());
     }
 
     private CycleStatus.Result last(Long teamId, CycleKind kind, Instant now) {

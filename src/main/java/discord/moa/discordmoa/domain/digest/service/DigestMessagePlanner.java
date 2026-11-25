@@ -15,8 +15,17 @@ public class DigestMessagePlanner {
 
     static final int HEADER_COMPONENTS = 1;
     static final int ITEM_COMPONENTS = 5;
+    static final int FOOTER_COMPONENTS = 2;   // 구분선 + 텍스트
 
     public List<DigestMessage> plan(String header, Long mentionUserId, List<PlannedItem> items) {
+        return plan(header, mentionUserId, items, null);
+    }
+
+    /**
+     * @param footer 마지막 메시지 끝에 붙일 안내 (예: 확인하지 못한 레포). null이면 붙이지 않는다.
+     *               마지막 메시지에 자리가 없으면 안내만 담은 메시지를 하나 더 만든다.
+     */
+    public List<DigestMessage> plan(String header, Long mentionUserId, List<PlannedItem> items, String footer) {
         List<DigestMessage> messages = new ArrayList<>();
 
         List<DigestBlock> blocks = new ArrayList<>(List.of(DigestBlock.textOnly(header)));
@@ -41,6 +50,16 @@ public class DigestMessagePlanner {
             blocks.add(DigestBlock.item(item.itemId(), item.text()));
             components += ITEM_COMPONENTS;
             textLength += itemLength;
+        }
+
+        if (footer != null) {
+            boolean fits = components + FOOTER_COMPONENTS <= MAX_COMPONENTS
+                    && textLength + footer.length() <= MAX_TEXT_LENGTH;
+            if (!fits) {
+                messages.add(new DigestMessage(messages.isEmpty() ? mentionUserId : null, blocks));
+                blocks = new ArrayList<>();
+            }
+            blocks.add(DigestBlock.textOnly(footer));
         }
 
         messages.add(new DigestMessage(messages.isEmpty() ? mentionUserId : null, blocks));

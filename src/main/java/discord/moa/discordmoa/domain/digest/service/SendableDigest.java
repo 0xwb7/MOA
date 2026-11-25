@@ -20,7 +20,9 @@ public record SendableDigest(
         String headerText,
         Long mentionUserId,
         String fallbackReason,
-        List<Item> items
+        List<Item> items,
+        List<String> uncollectedRepos,   // 수집하지 못한 레포. 없으면 빈 목록
+        String footer                    // 메시지 끝에 붙일 안내 (NO_CHANGE는 헤더가 곧 안내라 null). 없으면 null
 ) {
 
     public record Item(Long itemId, String text) {

@@ -121,6 +121,8 @@ public class DigestPreparer {
 
         try {
             List<RepoCollectResult> collected = changeCollector.collectTeam(teamId);
+            // 요약 전에 기록해 두어야 마감 fallback·발송 시점 즉석 fallback·재시작 복구 발송도 PM에게 같은 안내를 한다
+            digestWriter.recordUncollectedRepos(claim.digestId(), failedRepoNames(collected));
             if (kind == CycleKind.SCHEDULED) {
                 notifyCollectFailures(team, cycle, collected);
             }
@@ -154,6 +156,13 @@ public class DigestPreparer {
             opsNotifier.notify(new OpsEvent(OpsEvent.Type.COLLECT_FAILED, team.getName(), cycle,
                     "레포 " + failures.size() + "개를 수집하지 못했어요 (이번 회차에서 빠지고 다음 수집 때 다시 시도해요)\n- " + String.join("\n- ", failures)));
         }
+    }
+
+    private static List<String> failedRepoNames(List<RepoCollectResult> collected) {
+        return collected.stream()
+                .filter(result -> result.outcome() == RepoCollectResult.Outcome.FAILED)
+                .map(RepoCollectResult::repoFullName)
+                .toList();
     }
 
     private void prepareScheduledTeam(Team team, Instant cycle) {

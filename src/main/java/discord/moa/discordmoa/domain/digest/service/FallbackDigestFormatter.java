@@ -24,6 +24,16 @@ public class FallbackDigestFormatter {
         return "지난 12시간 동안 '" + escape(teamName) + "'에 변경 사항이 없어요";
     }
 
+    /**
+     * 수집하지 못한 레포가 있을 때의 안내. 변경이 없다고 단정하지 않는다.
+     * 배치가 없는 회차는 이 문장만 보내고(멘션 없음), 변경이 있는 회차는 메시지 끝에 한 줄로 붙인다.
+     */
+    public String uncollected(List<String> repoNames) {
+        return "⚠️ 일부 레포를 확인하지 못했어요: "
+                + String.join(", ", repoNames.stream().map(FallbackDigestFormatter::escape).toList())
+                + ". 운영진이 확인 중이에요.";
+    }
+
     public String itemText(String repoFullName, List<ChangeBatch> batches) {
         List<CommitSnapshot> commits = batches.stream()
                 .flatMap(batch -> batch.getCommits().stream())

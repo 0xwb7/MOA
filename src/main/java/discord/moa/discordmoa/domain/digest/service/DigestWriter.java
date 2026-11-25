@@ -16,6 +16,7 @@ import discord.moa.discordmoa.domain.summary.service.SummaryResult;
 import discord.moa.discordmoa.domain.team.entity.Team;
 import discord.moa.discordmoa.domain.team.entity.TrackedRepo;
 import discord.moa.discordmoa.domain.team.repository.TeamRepository;
+import discord.moa.discordmoa.global.jpa.StringListJsonConverter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -48,6 +49,8 @@ public class DigestWriter {
     static final String LATE_COLLECTED_REASON = "요약을 시작한 뒤에 수집된 변경이라 요약하지 않았어요";
     static final String BATCHES_CHANGED_REASON = "요약하는 동안 배치 상태가 바뀌었어요";
 
+    private static final StringListJsonConverter JSON_LIST = new StringListJsonConverter();
+
     private final TeamRepository teamRepository;
     private final ChangeBatchRepository changeBatchRepository;
     private final DigestRepository digestRepository;
@@ -76,6 +79,31 @@ public class DigestWriter {
         }
     }
 
+    /**
+     * 준비 중인 회차에 수집하지 못한 레포를 기록한다. 컬럼 길이를 넘으면 앞에서부터 담고 나머지는 "외 N개"로 줄인다.
+     * 회차가 이미 끝났으면(마감 fallback 등) 기록하지 않는다.
+     */
+    public void recordUncollectedRepos(Long digestId, List<String> repoNames) {
+        if (repoNames.isEmpty()) {
+            return;
+        }
+        digestRepository.recordUncollectedRepos(digestId, JSON_LIST.convertToDatabaseColumn(fitColumn(repoNames)),
+                DigestStatus.PREPARING.name());
+    }
+
+    static List<String> fitColumn(List<String> repoNames) {
+        for (int kept = repoNames.size(); kept > 0; kept--) {
+            List<String> fitted = new ArrayList<>(repoNames.subList(0, kept));
+            if (kept < repoNames.size()) {
+                fitted.add("외 " + (repoNames.size() - kept) + "개");
+            }
+            if (JSON_LIST.convertToDatabaseColumn(fitted).length() <= Digest.UNCOLLECTED_REPOS_MAX_LENGTH) {
+                return fitted;
+            }
+        }
+        return List.of("레포 " + repoNames.size() + "개");
+    }
+
     @Transactional(readOnly = true)
     public Optional<DigestStatus> findStatus(Long teamId, Instant scheduledFor) {
         return digestRepository.findByTeamIdAndScheduledFor(teamId, scheduledFor).map(Digest::getStatus);
@@ -86,6 +114,7 @@ public class DigestWriter {
      * <ul>
      *     <li>summary가 성공이고 요약한 배치를 모두 담을 수 있으면 LLM.</li>
      *     <li>그 밖에는 지금 COLLECTED인 배치로 FALLBACK, 배치가 없으면 NO_CHANGE.</li>
+     *     <li>NO_CHANGE인데 수집하지 못한 레포가 있으면 "변경 없음" 대신 확인하지 못했다는 안내를 쓴다 (멘션 없음).</li>
      * </ul>
      * 이미 READY/SENT/FAILED면(마감 fallback이나 발송 시점 즉석 fallback이 먼저 처리했으면) 아무것도 쓰지 않고 empty.
      *
@@ -130,7 +159,9 @@ public class DigestWriter {
             return Optional.of(new CompletedDigest(DigestType.LLM, null));
         }
         if (batches.isEmpty()) {
-            digest.fillContent(DigestType.NO_CHANGE, formatter.noChange(team.getName()), null, null);
+            List<String> uncollected = digest.getUncollectedRepos();
+            String header = uncollected.isEmpty() ? formatter.noChange(team.getName()) : formatter.uncollected(uncollected);
+            digest.fillContent(DigestType.NO_CHANGE, header, null, null);
             return Optional.of(new CompletedDigest(DigestType.NO_CHANGE, null));
         }
         saveFallbackItems(digest, batches);
@@ -157,9 +188,20 @@ public class DigestWriter {
         List<SendableDigest.Item> items = digestItemRepository.findAllByDigestIdOrderByIdAsc(digestId).stream()
                 .map(item -> new SendableDigest.Item(item.getId(), item.getText()))
                 .toList();
+        List<String> uncollected = digest.getUncollectedRepos();
         return new SendableDigest(digest.getId(), team.getId(), team.getName(), team.getDiscordChannelId(),
                 digest.getScheduledFor(), digest.getCycleKind(), digest.getType(), digest.getHeaderText(),
-                digest.getMentionUserId(), digest.getFallbackReason(), items);
+                digest.getMentionUserId(), digest.getFallbackReason(), items, uncollected, footer(digest.getType(), uncollected));
+    }
+
+    /**
+     * 변경이 있는 회차(LLM, FALLBACK) 메시지 끝에 붙일 안내. NO_CHANGE는 헤더가 곧 안내라 붙이지 않는다.
+     */
+    private String footer(DigestType type, List<String> uncollected) {
+        if (type == DigestType.NO_CHANGE || uncollected.isEmpty()) {
+            return null;
+        }
+        return formatter.uncollected(uncollected);
     }
 
     /**

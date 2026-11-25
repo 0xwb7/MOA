@@ -1,7 +1,9 @@
 package discord.moa.discordmoa.domain.digest.entity;
 
 import discord.moa.discordmoa.domain.team.entity.Team;
+import discord.moa.discordmoa.global.jpa.StringListJsonConverter;
 import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -20,6 +22,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 팀의 발송 회차 하나. 회차는 발송 예정 시각(scheduledFor)으로 식별하고, (팀, scheduledFor)는 유일하다.
@@ -37,6 +40,7 @@ public class Digest {
 
     private static final int FAILURE_REASON_MAX_LENGTH = 1000;
     private static final int HEADER_MAX_LENGTH = 2000;
+    public static final int UNCOLLECTED_REPOS_MAX_LENGTH = 1000;
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -74,6 +78,12 @@ public class Digest {
     // LLM 요약 대신 변경 목록(FALLBACK)으로 만든 이유
     @Column(length = FAILURE_REASON_MAX_LENGTH)
     private String fallbackReason;
+
+    // 이번 회차 준비 때 수집하지 못한 레포 이름 (JSON 배열). PM 메시지에 "일부 레포를 확인하지 못했어요"로 알린다.
+    // 준비 도중(PREPARING) 저장해서 마감 fallback, 발송 시점 즉석 fallback, 재시작 복구 발송에서도 유지된다. 없으면 null
+    @Convert(converter = StringListJsonConverter.class)
+    @Column(length = UNCOLLECTED_REPOS_MAX_LENGTH)
+    private List<String> uncollectedRepos;
 
     @Column(nullable = false)
     private Instant createdAt;
@@ -114,6 +124,10 @@ public class Digest {
     public void markFailed(String reason) {
         this.status = DigestStatus.FAILED;
         this.failureReason = cut(reason);
+    }
+
+    public List<String> getUncollectedRepos() {
+        return uncollectedRepos == null ? List.of() : uncollectedRepos;
     }
 
     public boolean isFinished() {

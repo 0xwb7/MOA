@@ -368,19 +368,23 @@ public class SlashCommandListener extends ListenerAdapter {
         }
     }
 
-    private String describeSend(DigestSendResult result) {
+    static String describeSend(DigestSendResult result) {
         String summaryNote = result.summaryFallbackReason() == null
                 ? ""
                 : "\n⚠️ LLM 요약 대신 변경 목록으로 보냈어요: " + result.summaryFallbackReason();
         if (!result.sent()) {
             return "⚠️ 발송 실패: " + result.failureReason() + summaryNote;
         }
+        boolean uncollected = !result.uncollectedRepos().isEmpty();
         if (result.type() == DigestType.NO_CHANGE) {
-            return "✅ 변경이 없어 '변경 사항이 없어요' 안내를 보냈어요.";
+            return uncollected
+                    ? "✅ 일부 레포를 확인하지 못해 '변경 없음' 대신 확인하지 못했다는 안내를 보냈어요."
+                    : "✅ 변경이 없어 '변경 사항이 없어요' 안내를 보냈어요.";
         }
         String kind = result.type() == DigestType.LLM ? " (LLM 요약)" : "";
+        String uncollectedNote = uncollected ? "\n⚠️ 확인하지 못한 레포가 있다는 안내를 메시지 끝에 붙였어요." : "";
         return "✅ 발송 완료" + kind + ": 항목 " + result.itemCount() + "개, 메시지 " + result.messageCount() + "개"
-                + summaryNote;
+                + summaryNote + uncollectedNote;
     }
 
     private String describe(RepoCollectResult repo) {

@@ -36,6 +36,16 @@ public interface DigestRepository extends JpaRepository<Digest, Long> {
                              @Param("ready") DigestStatus ready, @Param("now") Instant now);
 
     /**
+     * 준비 중(PREPARING)인 회차에만 수집하지 못한 레포 목록을 기록한다. 0이면 그사이 마감 fallback 등이 회차를 끝낸 것이다.
+     * 엔티티를 읽어 고치면 다른 쪽이 바꾼 상태를 덮어쓸 수 있어 조건부 UPDATE로 쓴다.
+     * 목록 파라미터가 IN 목록처럼 펼쳐지지 않게 JSON 문자열로 받아 네이티브 쿼리로 쓴다.
+     */
+    @Transactional
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = "update digest set uncollected_repos = :json where id = :id and status = :preparing", nativeQuery = true)
+    int recordUncollectedRepos(@Param("id") Long id, @Param("json") String json, @Param("preparing") String preparing);
+
+    /**
      * READY이고 아직 아무도 보내기 시작하지 않았을 때만 발송을 선점한다.
      */
     @Transactional

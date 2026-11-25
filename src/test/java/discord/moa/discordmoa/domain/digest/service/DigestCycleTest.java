@@ -94,6 +94,7 @@ class DigestCycleTest {
     private static final Instant NEXT_CYCLE = kst(21, 0);
     private static final Long CHANNEL_ID = 100L;
     private static final Long PM_ID = 7L;
+    private static final String UNCOLLECTED_BACKEND = "⚠️ 일부 레포를 확인하지 못했어요: team1/backend. 운영진이 확인 중이에요.";
 
     @Autowired
     private TeamRepository teamRepository;
@@ -548,13 +549,95 @@ class DigestCycleTest {
     }
 
     @Test
-    void 수동_발송에서는_레포_수집_실패를_운영_알림으로_보내지_않는다() {
-        given(changeCollector.collectTeam(team.getId())).willReturn(List.of(
-                new RepoCollectResult("team1/backend", RepoCollectResult.Outcome.FAILED, 0, 0, false, false, "원인")));
+    void 수동_발송에서는_레포_수집_실패를_운영_알림으로_보내지_않지만_PM_메시지에는_알린다() {
+        given(changeCollector.collectTeam(team.getId())).willReturn(List.of(failed("team1/backend")));
 
-        service.sendNowByChannel(CHANNEL_ID);
+        ManualSendResult result = service.sendNowByChannel(CHANNEL_ID);
 
         verify(opsNotifier, never()).notify(any());
+        assertThat(result.sent().type()).isEqualTo(DigestType.NO_CHANGE);
+        assertThat(result.sent().uncollectedRepos()).containsExactly("team1/backend");
+        assertThat(sentMessages().getFirst().blocks()).singleElement()
+                .extracting(block -> block.text()).isEqualTo(UNCOLLECTED_BACKEND);
+    }
+
+    // ---- 수집 실패를 PM에게 "변경 없음"으로 보내지 않는다 ----
+
+    @Test
+    void 수집에_실패한_레포가_있고_변경이_없으면_변경_없음_대신_확인하지_못했다고_멘션_없이_보낸다() {
+        given(changeCollector.collectTeam(team.getId())).willReturn(List.of(
+                failed("team1/backend"),
+                new RepoCollectResult("team1/frontend", RepoCollectResult.Outcome.NO_CHANGE, 0, 0, false, false, null)));
+
+        preparer.prepareCycle(CYCLE);
+        clock.set(CYCLE);
+        service.sendScheduled(team, CYCLE);
+
+        Digest digest = cycleDigest(CYCLE);
+        assertThat(digest.getType()).isEqualTo(DigestType.NO_CHANGE);
+        assertThat(digest.getUncollectedRepos()).containsExactly("team1/backend");
+        DigestMessage message = sentMessages().getFirst();
+        assertThat(message.mentionUserId()).isNull();
+        assertThat(message.blocks()).singleElement().extracting(block -> block.text()).isEqualTo(UNCOLLECTED_BACKEND);
+        assertThat(opsEvents()).extracting(OpsEvent::type).containsExactly(OpsEvent.Type.COLLECT_FAILED);   // 운영 알림은 그대로
+    }
+
+    @Test
+    void 수집에_실패한_레포가_있고_변경이_있으면_변경_목록_메시지_끝에_한_줄로_알린다() {
+        collected(frontend, "로그인 화면");
+        given(changeCollector.collectTeam(team.getId())).willReturn(List.of(failed("team1/backend")));
+
+        preparer.prepareCycle(CYCLE);
+        clock.set(CYCLE);
+        DigestSendResult result = service.sendScheduled(team, CYCLE).orElseThrow();
+
+        assertThat(result.type()).isEqualTo(DigestType.FALLBACK);
+        List<DigestMessage> messages = sentMessages();
+        assertThat(messages.getFirst().mentionUserId()).isEqualTo(PM_ID);
+        assertThat(messages.getLast().blocks().getLast().text()).isEqualTo(UNCOLLECTED_BACKEND);
+        assertThat(messages.getLast().blocks().getLast().hasButtons()).isFalse();
+    }
+
+    @Test
+    void 수집에_실패한_레포가_있고_LLM_요약을_보내도_메시지_끝에_알린다() {
+        collected(frontend, "로그인 화면");
+        given(changeCollector.collectTeam(team.getId())).willReturn(List.of(failed("team1/backend")));
+        givenSummaryLlm(new SummaryStatus[]{SummaryStatus.PARTIAL}, "로그인 화면이 준비됐어요");
+
+        preparer.prepareCycle(CYCLE);
+        clock.set(CYCLE);
+        service.sendScheduled(team, CYCLE);
+
+        assertThat(cycleDigest(CYCLE).getType()).isEqualTo(DigestType.LLM);
+        assertThat(sentMessages().getLast().blocks().getLast().text()).isEqualTo(UNCOLLECTED_BACKEND);
+    }
+
+    @Test
+    void 수집_실패_기록은_준비가_멈춘_뒤_재시작_복구_발송에서도_유지된다() {
+        given(changeCollector.collectTeam(team.getId())).willReturn(List.of(failed("team1/backend")));
+        given(changeSummarizer.summarize(anyLong(), any())).willThrow(new IllegalStateException("요약 중 멈춤"));
+        preparer.prepareCycle(CYCLE);
+        assertThat(cycleDigest(CYCLE).getStatus()).isEqualTo(DigestStatus.PREPARING);
+
+        clock.set(kst(9, 10));
+        recovery.recover();
+
+        Digest digest = cycleDigest(CYCLE);
+        assertThat(digest.getStatus()).isEqualTo(DigestStatus.SENT);
+        assertThat(digest.getType()).isEqualTo(DigestType.NO_CHANGE);
+        assertThat(sentMessages().getFirst().blocks().getFirst().text()).isEqualTo(UNCOLLECTED_BACKEND);
+    }
+
+    @Test
+    void 수집_실패_기록은_이미_끝난_회차를_바꾸지_않는다() {
+        Long digestId = digestWriter.claimCycle(team.getId(), CYCLE, CycleKind.SCHEDULED, kst(8, 30)).digestId();
+        digestWriter.complete(digestId, null, "마감", kst(8, 58));
+
+        digestWriter.recordUncollectedRepos(digestId, List.of("team1/backend"));
+
+        Digest digest = cycleDigest(CYCLE);
+        assertThat(digest.getStatus()).isEqualTo(DigestStatus.READY);
+        assertThat(digest.getUncollectedRepos()).isEmpty();
     }
 
     @Test
@@ -883,6 +966,11 @@ class DigestCycleTest {
                 "https://github.com/" + repo.getFullName() + "/commit/" + sha);
         return changeBatchRepository.save(new ChangeBatch(repo, "base" + shaSeq, sha, clock.instant(),
                 false, false, List.of(commit), List.of()));
+    }
+
+    private static RepoCollectResult failed(String repoFullName) {
+        return new RepoCollectResult(repoFullName, RepoCollectResult.Outcome.FAILED, 0, 0, false, false,
+                "App 설치가 해제됐어요 (레포 주인이 다시 설치해야 해요)");
     }
 
     private void givenSummaryFallback() {

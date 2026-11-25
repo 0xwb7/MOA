@@ -59,6 +59,45 @@ class DigestMessagePlannerTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    @Test
+    void 안내가_있으면_마지막_메시지_끝에_버튼_없이_붙인다() {
+        List<DigestMessage> messages = planner.plan(HEADER, 7L, List.of(item(1L, "a")), "⚠️ 안내");
+
+        assertThat(messages).singleElement().satisfies(message -> assertThat(message.blocks()).containsExactly(
+                DigestBlock.textOnly(HEADER), DigestBlock.item(1L, "a"), DigestBlock.textOnly("⚠️ 안내")));
+    }
+
+    @Test
+    void 마지막_메시지에_안내_자리가_없으면_안내만_담은_메시지를_더_만든다() {
+        // 텍스트 합계가 4000자를 넘게 만든다
+        String big = "x".repeat(3990);
+
+        List<DigestMessage> messages = planner.plan(HEADER, 7L, List.of(item(1L, big)), "⚠️ 안내");
+
+        assertThat(messages).hasSize(2);
+        assertThat(messages.get(0).blocks()).containsExactly(DigestBlock.textOnly(HEADER), DigestBlock.item(1L, big));
+        assertThat(messages.get(1).blocks()).containsExactly(DigestBlock.textOnly("⚠️ 안내"));
+        assertThat(messages.get(1).mentionUserId()).isNull();
+    }
+
+    @Test
+    void 컴포넌트가_모자라면_안내를_다음_메시지로_넘긴다() {
+        // 첫 메시지: 헤더 1 + 항목 7개 = 36, 둘째 메시지: 항목 8개 = 40 → 안내(2)는 셋째 메시지로
+        List<PlannedItem> items = LongStream.rangeClosed(1, 15).mapToObj(id -> item(id, "t" + id)).toList();
+
+        List<DigestMessage> messages = planner.plan(HEADER, 7L, items, "⚠️ 안내");
+
+        assertThat(messages).hasSize(3);
+        assertThat(messages.get(1).blocks()).hasSize(8);
+        assertThat(messages.get(2).blocks()).containsExactly(DigestBlock.textOnly("⚠️ 안내"));
+    }
+
+    @Test
+    void 안내가_없으면_기존과_같다() {
+        assertThat(planner.plan(HEADER, 7L, List.of(item(1L, "a")), null))
+                .isEqualTo(planner.plan(HEADER, 7L, List.of(item(1L, "a"))));
+    }
+
     private static PlannedItem item(Long id, String text) {
         return new PlannedItem(id, text);
     }

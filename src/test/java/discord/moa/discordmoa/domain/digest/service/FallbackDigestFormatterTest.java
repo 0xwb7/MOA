@@ -22,6 +22,26 @@ class FallbackDigestFormatterTest {
     private final TrackedRepo repo = repo(1L, team, "0xwb7/springSecurityExample");
 
     @Test
+    void 확인하지_못한_레포_안내는_변경이_없다고_단정하지_않는다() {
+        assertThat(formatter.uncollected(List.of("team1/backend", "team1/**front**")))
+                .isEqualTo("⚠️ 일부 레포를 확인하지 못했어요: team1/backend, team1/\\*\\*front\\*\\*. 운영진이 확인 중이에요.")
+                .doesNotContain("변경 사항이 없어요");
+    }
+
+    @Test
+    void 확인하지_못한_레포가_많으면_컬럼_길이_안에서_외_N개로_줄인다() {
+        List<String> names = IntStream.rangeClosed(1, 20).mapToObj(i -> "owner/" + "r".repeat(90) + i).toList();
+
+        List<String> fitted = DigestWriter.fitColumn(names);
+
+        assertThat(new discord.moa.discordmoa.global.jpa.StringListJsonConverter().convertToDatabaseColumn(fitted).length())
+                .isLessThanOrEqualTo(discord.moa.discordmoa.domain.digest.entity.Digest.UNCOLLECTED_REPOS_MAX_LENGTH);
+        assertThat(fitted.getFirst()).isEqualTo(names.getFirst());
+        assertThat(fitted.getLast()).matches("외 \\d+개");
+        assertThat(DigestWriter.fitColumn(List.of("team1/backend"))).containsExactly("team1/backend");
+    }
+
+    @Test
     void 항목은_레포명_커밋수_커밋_첫줄_변경내역_링크로_구성된다() {
         ChangeBatch batch = batch(1L, repo, "base", "head", "로그인 API 추가", "비밀번호 암호화 적용", "테스트 코드 수정");
 
