@@ -67,22 +67,22 @@ class RepoListMessageTest {
     void 재등록과_이동은_등록_응답에서_구분된다() {
         TrackedRepo repo = new TrackedRepo(team, 1L, "team1/app", "main", "a".repeat(40), 555L);
 
-        assertThat(SlashCommandListener.describeRegistration(RepoRegistration.of(repo, RepoRegistration.Kind.REACTIVATED)))
+        assertThat(TeamCommandHandler.describeRegistration(RepoRegistration.of(repo, RepoRegistration.Kind.REACTIVATED)))
                 .contains("다시 등록했어요", "해제돼 있던 동안의 변경은 건너뛰고");
-        assertThat(SlashCommandListener.describeRegistration(
+        assertThat(TeamCommandHandler.describeRegistration(
                 new RepoRegistration(repo, RepoRegistration.Kind.MOVED, "2팀")))
                 .contains("'2팀' 팀에서 이 팀으로 옮겨 등록했어요");
-        assertThat(SlashCommandListener.describeRegistration(RepoRegistration.of(repo, RepoRegistration.Kind.NEW)))
+        assertThat(TeamCommandHandler.describeRegistration(RepoRegistration.of(repo, RepoRegistration.Kind.NEW)))
                 .contains("레포가 등록됐어요");
     }
 
     @Test
     void 해제_응답은_보내지_않게_된_변경이_있을_때만_건수를_알려준다() {
-        assertThat(SlashCommandListener.describeDeactivation(new RepoDeactivation("1팀", "team1/app", 3)))
+        assertThat(TeamCommandHandler.describeDeactivation(new RepoDeactivation("1팀", "team1/app", 3)))
                 .isEqualTo("✅ team1/app 레포 등록을 해제했어요. 이제 이 레포의 변경은 수집하지 않아요.\n"
                         + "아직 보내지 않은 변경 3건은 보내지 않아요.\n"
                         + "다시 수집하려면 /레포등록 을 실행해 주세요.");
-        assertThat(SlashCommandListener.describeDeactivation(new RepoDeactivation("1팀", "team1/app", 0)))
+        assertThat(TeamCommandHandler.describeDeactivation(new RepoDeactivation("1팀", "team1/app", 0)))
                 .isEqualTo("✅ team1/app 레포 등록을 해제했어요. 이제 이 레포의 변경은 수집하지 않아요.\n"
                         + "다시 수집하려면 /레포등록 을 실행해 주세요.");
     }
@@ -91,11 +91,11 @@ class RepoListMessageTest {
     void 같은_이름의_이전_등록을_정리했으면_등록_응답에_알려준다() {
         TrackedRepo repo = new TrackedRepo(team, 1L, "team1/app", "main", "a".repeat(40), 555L);
 
-        assertThat(SlashCommandListener.describeRegistration(
+        assertThat(TeamCommandHandler.describeRegistration(
                 RepoRegistration.of(repo, RepoRegistration.Kind.NEW).withCleanedUpStale(true)))
                 .startsWith("✅ team1/app 레포가 등록됐어요.")
                 .endsWith("\n같은 이름의 이전 레포 등록을 정리했어요.");
-        assertThat(SlashCommandListener.describeRegistration(RepoRegistration.of(repo, RepoRegistration.Kind.NEW)))
+        assertThat(TeamCommandHandler.describeRegistration(RepoRegistration.of(repo, RepoRegistration.Kind.NEW)))
                 .doesNotContain("정리");
     }
 }

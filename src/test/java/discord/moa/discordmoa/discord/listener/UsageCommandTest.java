@@ -1,14 +1,8 @@
 package discord.moa.discordmoa.discord.listener;
 
-import discord.moa.discordmoa.discord.ops.DiscordOpsNotifier;
 import discord.moa.discordmoa.domain.account.service.AccountLinkService;
-import discord.moa.discordmoa.domain.collect.service.ChangeCollector;
-import discord.moa.discordmoa.domain.digest.service.DigestService;
 import discord.moa.discordmoa.domain.guide.service.UsageGuide;
 import discord.moa.discordmoa.domain.guide.service.UsageGuideService;
-import discord.moa.discordmoa.domain.summary.service.ChangeSummarizer;
-import discord.moa.discordmoa.domain.team.service.TeamService;
-import discord.moa.discordmoa.domain.team.service.TrackedRepoService;
 import net.dv8tion.jda.api.entities.User;
 import net.dv8tion.jda.api.entities.channel.unions.MessageChannelUnion;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
@@ -32,9 +26,8 @@ import static org.mockito.Mockito.verify;
 class UsageCommandTest {
 
     private final UsageGuideService usageGuideService = mock(UsageGuideService.class);
-    private final SlashCommandListener listener = new SlashCommandListener(mock(AccountLinkService.class),
-            mock(TeamService.class), mock(TrackedRepoService.class), mock(ChangeCollector.class), mock(DigestService.class),
-            mock(ChangeSummarizer.class), mock(DiscordOpsNotifier.class), usageGuideService, mock(ExecutorService.class));
+    private final SlashCommandListener listener = new SlashCommandListener(List.of(
+            new GeneralCommandHandler(mock(AccountLinkService.class), usageGuideService, mock(ExecutorService.class))));
 
     @Test
     @SuppressWarnings("unchecked")

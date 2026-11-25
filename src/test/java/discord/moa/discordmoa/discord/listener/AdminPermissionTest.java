@@ -16,8 +16,8 @@ class AdminPermissionTest {
         given(admin.hasPermission(Permission.MANAGE_SERVER)).willReturn(true);
         Member developer = mock(Member.class);
 
-        assertThat(SlashCommandListener.isAdmin(admin)).isTrue();
-        assertThat(SlashCommandListener.isAdmin(developer)).isFalse();
-        assertThat(SlashCommandListener.isAdmin(null)).isFalse();   // DM 등 서버 밖
+        assertThat(TeamCommandHandler.isAdmin(admin)).isTrue();
+        assertThat(TeamCommandHandler.isAdmin(developer)).isFalse();
+        assertThat(TeamCommandHandler.isAdmin(null)).isFalse();   // DM 등 서버 밖
     }
 }
