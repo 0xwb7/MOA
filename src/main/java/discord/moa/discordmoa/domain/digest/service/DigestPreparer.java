@@ -125,6 +125,7 @@ public class DigestPreparer {
             digestWriter.recordUncollectedRepos(claim.digestId(), failedRepoNames(collected));
             if (kind == CycleKind.SCHEDULED) {
                 notifyCollectFailures(team, cycle, collected);
+                notifyTruncated(team, cycle, collected);
             }
             SummaryResult summary = changeSummarizer.summarize(teamId, LlmCallPurpose.DIGEST);
             Optional<CompletedDigest> saved = digestWriter.complete(claim.digestId(), summary, null, clock.instant());
@@ -155,6 +156,21 @@ public class DigestPreparer {
         if (!failures.isEmpty()) {
             opsNotifier.notify(new OpsEvent(OpsEvent.Type.COLLECT_FAILED, team.getName(), cycle,
                     "레포 " + failures.size() + "개를 수집하지 못했어요 (이번 회차에서 빠지고 다음 수집 때 다시 시도해요)\n- " + String.join("\n- ", failures)));
+        }
+    }
+
+    /**
+     * 정기 준비에서 변경이 많아 일부만 수집한 레포를 알린다. 커서는 HEAD로 넘어가므로 빠진 커밋은 이후 회차에도 들어가지 않는다.
+     */
+    private void notifyTruncated(Team team, Instant cycle, List<RepoCollectResult> collected) {
+        List<String> truncated = collected.stream()
+                .filter(result -> result.outcome() == RepoCollectResult.Outcome.COLLECTED && result.truncated())
+                .map(result -> result.repoFullName() + " (받은 커밋 " + result.commitCount() + "개, 파일 " + result.fileCount() + "개)")
+                .toList();
+        if (!truncated.isEmpty()) {
+            opsNotifier.notify(new OpsEvent(OpsEvent.Type.COLLECT_TRUNCATED, team.getName(), cycle,
+                    "레포 " + truncated.size() + "개의 변경이 많아 일부만 수집했어요 (빠진 커밋은 이후 회차에도 들어가지 않아요)\n- "
+                            + String.join("\n- ", truncated)));
         }
     }
 

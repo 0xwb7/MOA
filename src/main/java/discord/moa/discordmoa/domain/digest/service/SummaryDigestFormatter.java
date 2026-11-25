@@ -12,6 +12,13 @@ public class SummaryDigestFormatter {
                 + "-# 🟢  기능 완성    🟡  일부만 됐어요    ⚪  내부 작업";
     }
 
+    /**
+     * 수집이 잘린(커밋·파일이 많아 일부만 받은) 배치를 요약했을 때 메시지 끝에 붙인다.
+     */
+    public String truncatedNotice() {
+        return "⚠️ 변경이 많아 일부만 요약했어요";
+    }
+
     public String itemText(SummaryItem item) {
         return item.status().emoji() + " " + MarkdownSanitizer.escape(item.title());
     }

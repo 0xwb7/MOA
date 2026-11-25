@@ -191,17 +191,29 @@ public class DigestWriter {
         List<String> uncollected = digest.getUncollectedRepos();
         return new SendableDigest(digest.getId(), team.getId(), team.getName(), team.getDiscordChannelId(),
                 digest.getScheduledFor(), digest.getCycleKind(), digest.getType(), digest.getHeaderText(),
-                digest.getMentionUserId(), digest.getFallbackReason(), items, uncollected, footer(digest.getType(), uncollected));
+                digest.getMentionUserId(), digest.getFallbackReason(), items, uncollected, footer(digest, uncollected));
     }
 
     /**
-     * 변경이 있는 회차(LLM, FALLBACK) 메시지 끝에 붙일 안내. NO_CHANGE는 헤더가 곧 안내라 붙이지 않는다.
+     * 변경이 있는 회차(LLM, FALLBACK) 메시지 끝에 붙일 안내. 없으면 null.
+     * <ul>
+     *     <li>LLM: 담긴 배치 중 수집이 잘린 것이 있으면 일부만 요약했다는 안내. (FALLBACK은 항목마다 이미 표시한다)</li>
+     *     <li>수집하지 못한 레포 안내. NO_CHANGE는 헤더가 곧 이 안내라 붙이지 않는다.</li>
+     * </ul>
+     * 발송할 때 DB에서 계산하므로 재시작 복구 발송에도 그대로 붙는다.
      */
-    private String footer(DigestType type, List<String> uncollected) {
-        if (type == DigestType.NO_CHANGE || uncollected.isEmpty()) {
+    private String footer(Digest digest, List<String> uncollected) {
+        if (digest.getType() == DigestType.NO_CHANGE) {
             return null;
         }
-        return formatter.uncollected(uncollected);
+        List<String> lines = new ArrayList<>();
+        if (digest.getType() == DigestType.LLM && changeBatchRepository.existsByDigestIdAndTruncatedTrue(digest.getId())) {
+            lines.add(summaryFormatter.truncatedNotice());
+        }
+        if (!uncollected.isEmpty()) {
+            lines.add(formatter.uncollected(uncollected));
+        }
+        return lines.isEmpty() ? null : String.join("\n", lines);
     }
 
     /**

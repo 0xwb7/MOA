@@ -31,6 +31,8 @@ public interface ChangeBatchRepository extends JpaRepository<ChangeBatch, Long> 
     @EntityGraph(attributePaths = "trackedRepo")
     List<ChangeBatch> findAllByDigestIdOrderByIdAsc(Long digestId);
 
+    boolean existsByDigestIdAndTruncatedTrue(Long digestId);
+
     List<ChangeBatch> findAllByTrackedRepoIdAndStatus(Long trackedRepoId, ChangeBatchStatus status);
 
     /**

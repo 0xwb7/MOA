@@ -35,6 +35,7 @@ public record OpsEvent(
         PREPARE_FAILED("준비 실패", Severity.FAILURE),
         PREPARE_DEADLINE_FALLBACK("준비 마감 초과로 변경 목록 발송", Severity.WARNING),
         COLLECT_FAILED("정기 준비 중 레포 수집 실패", Severity.WARNING),
+        COLLECT_TRUNCATED("정기 준비 중 수집 결과 잘림", Severity.WARNING),
         SUMMARY_FALLBACK("LLM 요약 실패로 변경 목록 발송", Severity.WARNING),
         SEND_INLINE_FALLBACK("발송 시점 즉석 변경 목록 발송", Severity.WARNING),
         SEND_FAILED("발송 실패", Severity.FAILURE),

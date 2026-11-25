@@ -628,6 +628,82 @@ class DigestCycleTest {
         assertThat(sentMessages().getFirst().blocks().getFirst().text()).isEqualTo(UNCOLLECTED_BACKEND);
     }
 
+    // ---- 잘린 수집 결과 ----
+
+    @Test
+    void 잘린_배치를_LLM으로_요약하면_메시지_끝에_일부만_요약했다고_알리고_운영진에게도_알린다() {
+        ChangeBatch big = collected(backend, "대규모 변경", true);
+        given(changeCollector.collectTeam(team.getId())).willReturn(List.of(
+                new RepoCollectResult("team1/backend", RepoCollectResult.Outcome.COLLECTED, 250, 300, false, true, null)));
+        givenSummaryLlm(new SummaryStatus[]{SummaryStatus.PARTIAL}, "회원 기능의 서버 쪽이 준비됐어요");
+
+        preparer.prepareCycle(CYCLE);
+        clock.set(CYCLE);
+        service.sendScheduled(team, CYCLE);
+
+        assertThat(batch(big).getStatus()).isEqualTo(ChangeBatchStatus.SENT);
+        assertThat(sentMessages().getLast().blocks().getLast().text()).isEqualTo("⚠️ 변경이 많아 일부만 요약했어요");
+        OpsEvent truncated = opsEvents().getFirst();
+        assertThat(truncated.type()).isEqualTo(OpsEvent.Type.COLLECT_TRUNCATED);
+        assertThat(truncated.type().severity()).isEqualTo(OpsEvent.Severity.WARNING);
+        assertThat(truncated.detail()).contains("team1/backend (받은 커밋 250개, 파일 300개)", "이후 회차에도 들어가지 않아요");
+    }
+
+    @Test
+    void 잘리지_않았으면_일부만_요약했다는_안내와_운영_알림이_없다() {
+        collected(backend, "로그인 API 추가");
+        given(changeCollector.collectTeam(team.getId())).willReturn(List.of(
+                new RepoCollectResult("team1/backend", RepoCollectResult.Outcome.COLLECTED, 1, 1, false, false, null)));
+        givenSummaryLlm(new SummaryStatus[]{SummaryStatus.PARTIAL}, "로그인 서버가 준비됐어요");
+
+        preparer.prepareCycle(CYCLE);
+        clock.set(CYCLE);
+        service.sendScheduled(team, CYCLE);
+
+        assertThat(sentMessages().getLast().blocks().getLast().hasButtons()).isTrue();   // 마지막 블록이 항목
+        verify(opsNotifier, never()).notify(any());
+    }
+
+    @Test
+    void 변경_목록은_항목마다_잘림을_표시하므로_메시지_끝_안내를_붙이지_않는다() {
+        collected(backend, "대규모 변경", true);
+
+        preparer.prepareCycle(CYCLE);
+        clock.set(CYCLE);
+        service.sendScheduled(team, CYCLE);
+
+        assertThat(cycleDigest(CYCLE).getType()).isEqualTo(DigestType.FALLBACK);
+        List<DigestMessage> messages = sentMessages();
+        assertThat(messages.getLast().blocks().getLast().text()).contains("⚠️ 일부 커밋만 표시해요");
+        assertThat(messages).flatMap(DigestMessage::blocks).extracting(block -> block.text())
+                .noneMatch(text -> text.contains("일부만 요약했어요"));
+    }
+
+    @Test
+    void 잘림과_수집_실패가_함께면_두_안내를_차례로_붙인다() {
+        collected(frontend, "대규모 변경", true);
+        given(changeCollector.collectTeam(team.getId())).willReturn(List.of(failed("team1/backend")));
+        givenSummaryLlm(new SummaryStatus[]{SummaryStatus.PARTIAL}, "회원 화면이 준비됐어요");
+
+        preparer.prepareCycle(CYCLE);
+        clock.set(CYCLE);
+        service.sendScheduled(team, CYCLE);
+
+        assertThat(sentMessages().getLast().blocks().getLast().text())
+                .isEqualTo("⚠️ 변경이 많아 일부만 요약했어요\n" + UNCOLLECTED_BACKEND);
+    }
+
+    @Test
+    void 수동_발송에서는_잘림을_운영_알림으로_보내지_않는다() {
+        collected(backend, "대규모 변경", true);
+        given(changeCollector.collectTeam(team.getId())).willReturn(List.of(
+                new RepoCollectResult("team1/backend", RepoCollectResult.Outcome.COLLECTED, 250, 300, false, true, null)));
+
+        service.sendNowByChannel(CHANNEL_ID);
+
+        verify(opsNotifier, never()).notify(any());
+    }
+
     @Test
     void 수집_실패_기록은_이미_끝난_회차를_바꾸지_않는다() {
         Long digestId = digestWriter.claimCycle(team.getId(), CYCLE, CycleKind.SCHEDULED, kst(8, 30)).digestId();
@@ -961,11 +1037,15 @@ class DigestCycleTest {
     }
 
     private ChangeBatch collected(TrackedRepo repo, String message) {
+        return collected(repo, message, false);
+    }
+
+    private ChangeBatch collected(TrackedRepo repo, String message, boolean truncated) {
         String sha = String.format("%040d", ++shaSeq);
         CommitSnapshot commit = new CommitSnapshot(sha, message, "alice", 11L, "Alice", clock.instant(),
                 "https://github.com/" + repo.getFullName() + "/commit/" + sha);
         return changeBatchRepository.save(new ChangeBatch(repo, "base" + shaSeq, sha, clock.instant(),
-                false, false, List.of(commit), List.of()));
+                false, truncated, List.of(commit), List.of()));
     }
 
     private static RepoCollectResult failed(String repoFullName) {
