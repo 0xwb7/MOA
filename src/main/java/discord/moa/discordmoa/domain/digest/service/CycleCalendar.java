@@ -1,4 +1,4 @@
-package discord.moa.discordmoa.domain.scheduler;
+package discord.moa.discordmoa.domain.digest.service;
 
 import discord.moa.discordmoa.global.config.ScheduleProperties;
 import org.springframework.scheduling.support.CronExpression;

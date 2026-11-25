@@ -1,4 +1,4 @@
-package discord.moa.discordmoa.domain.scheduler;
+package discord.moa.discordmoa.domain.digest.service;
 
 import discord.moa.discordmoa.global.config.ScheduleProperties;
 import org.junit.jupiter.api.Test;
@@ -10,7 +10,7 @@ import java.time.ZonedDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class CycleCalendarTest {
+public class CycleCalendarTest {
 
     private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
 
@@ -50,7 +50,7 @@ class CycleCalendarTest {
         assertThat(test.prepareDeadline(kst(2026, 11, 27, 14, 33, 0))).isEqualTo(kst(2026, 11, 27, 14, 32, 0));
     }
 
-    static Instant kst(int y, int mo, int d, int h, int mi, int s) {
+    public static Instant kst(int y, int mo, int d, int h, int mi, int s) {
         return ZonedDateTime.of(y, mo, d, h, mi, s, 0, SEOUL).toInstant();
     }
 }

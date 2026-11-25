@@ -13,7 +13,6 @@ import discord.moa.discordmoa.domain.digest.sender.DigestSendException;
 import discord.moa.discordmoa.domain.digest.sender.DigestSender;
 import discord.moa.discordmoa.domain.ops.OpsEvent;
 import discord.moa.discordmoa.domain.ops.OpsNotifier;
-import discord.moa.discordmoa.domain.scheduler.CycleCalendar;
 import discord.moa.discordmoa.domain.team.entity.Team;
 import discord.moa.discordmoa.domain.team.repository.TeamRepository;
 import discord.moa.discordmoa.domain.team.repository.TrackedRepoRepository;

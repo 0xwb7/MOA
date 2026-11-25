@@ -2,7 +2,7 @@ package discord.moa.discordmoa.domain.guide.service;
 
 import discord.moa.discordmoa.domain.account.entity.AccountLink;
 import discord.moa.discordmoa.domain.account.repository.AccountLinkRepository;
-import discord.moa.discordmoa.domain.scheduler.CycleCalendar;
+import discord.moa.discordmoa.domain.digest.service.CycleCalendar;
 import discord.moa.discordmoa.domain.team.entity.Team;
 import discord.moa.discordmoa.domain.team.repository.TeamRepository;
 import discord.moa.discordmoa.domain.team.repository.TrackedRepoRepository;

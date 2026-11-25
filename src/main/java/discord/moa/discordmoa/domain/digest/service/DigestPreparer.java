@@ -6,7 +6,6 @@ import discord.moa.discordmoa.domain.digest.entity.CycleKind;
 import discord.moa.discordmoa.domain.digest.entity.DigestType;
 import discord.moa.discordmoa.domain.ops.OpsEvent;
 import discord.moa.discordmoa.domain.ops.OpsNotifier;
-import discord.moa.discordmoa.domain.scheduler.CycleCalendar;
 import discord.moa.discordmoa.domain.summary.entity.LlmCallPurpose;
 import discord.moa.discordmoa.domain.summary.service.ChangeSummarizer;
 import discord.moa.discordmoa.domain.summary.service.SummaryResult;
