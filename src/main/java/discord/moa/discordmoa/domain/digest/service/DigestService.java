@@ -44,6 +44,8 @@ public class DigestService {
 
     static final String INLINE_NO_DIGEST_REASON = "준비된 회차가 없어 발송 시점에 변경 목록으로 만들었어요";
     static final String INLINE_PREPARING_REASON = "준비가 끝나지 않아 발송 시점에 변경 목록으로 만들었어요";
+    static final String RESEND_WARNING = "발송을 시작한 뒤 서버가 멈춘 회차를 다시 보내요. "
+            + "멈추기 전에 메시지가 이미 전송됐다면 PM이 같은 메시지를 두 번 받을 수 있어요 (중복 발송 가능)";
     static final String NO_REPO_MESSAGE = "등록된 레포가 없어요. /레포등록 으로 먼저 등록해 주세요.";
 
     private final DigestWriter digestWriter;
@@ -138,11 +140,15 @@ public class DigestService {
 
     /**
      * 재시작 복구용: 발송 도중 멈춰 선점만 남은 READY를 풀고 다시 보낸다.
+     * 전송은 됐는데 SENT를 기록하기 전에 멈췄을 수도 있어서 PM이 같은 메시지를 두 번 받을 수 있다 (최소 한 번 발송, ADR-003).
+     * 그래서 선점을 풀고 다시 보낼 때는 운영진에게 알린다.
      */
     public Optional<DigestSendResult> sendLate(Team team, Instant cycle) {
         digestRepository.findByTeamIdAndScheduledFor(team.getId(), cycle)
                 .filter(digest -> digest.getStatus() == DigestStatus.READY && digest.getSendStartedAt() != null)
-                .ifPresent(digest -> digestWriter.releaseSendClaim(digest.getId()));
+                .filter(digest -> digestWriter.releaseSendClaim(digest.getId()))
+                .ifPresent(digest -> opsNotifier.notify(new OpsEvent(OpsEvent.Type.RECOVERY_RESEND, team.getName(), cycle,
+                        RESEND_WARNING)));
         return sendScheduled(team, cycle);
     }
 

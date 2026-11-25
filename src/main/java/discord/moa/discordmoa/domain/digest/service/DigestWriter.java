@@ -177,8 +177,11 @@ public class DigestWriter {
         return digestRepository.claimSend(digestId, DigestStatus.READY, now) == 1;
     }
 
-    public void releaseSendClaim(Long digestId) {
-        digestRepository.releaseSendClaim(digestId, DigestStatus.READY);
+    /**
+     * @return 선점을 실제로 풀었으면 true
+     */
+    public boolean releaseSendClaim(Long digestId) {
+        return digestRepository.releaseSendClaim(digestId, DigestStatus.READY) == 1;
     }
 
     @Transactional(readOnly = true)

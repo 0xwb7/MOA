@@ -40,6 +40,7 @@ public record OpsEvent(
         SEND_INLINE_FALLBACK("발송 시점 즉석 변경 목록 발송", Severity.WARNING),
         SEND_FAILED("발송 실패", Severity.FAILURE),
         RECOVERY_LATE_SEND("재시작 복구: 늦은 발송", Severity.WARNING),
+        RECOVERY_RESEND("재시작 복구: 중복 발송 가능", Severity.WARNING),
         RECOVERY_ABANDONED("재시작 복구: 발송 포기", Severity.FAILURE),
         REPO_DEACTIVATED("레포 해제", Severity.INFO),
         QUESTION_FAILED("개발자 질문 처리 실패", Severity.WARNING),

@@ -477,6 +477,26 @@ class DigestCycleTest {
 
         assertThat(cycleDigest(CYCLE).getStatus()).isEqualTo(DigestStatus.SENT);
         verify(digestSender, times(1)).send(anyLong(), anyList());
+        OpsEvent resend = opsEvents().stream()
+                .filter(event -> event.type() == OpsEvent.Type.RECOVERY_RESEND).findFirst().orElseThrow();
+        assertThat(resend.type().severity()).isEqualTo(OpsEvent.Severity.WARNING);
+        assertThat(resend.teamName()).isEqualTo("1팀");
+        assertThat(resend.scheduledFor()).isEqualTo(CYCLE);
+        assertThat(resend.detail()).contains("중복 발송 가능");
+        assertThat(opsEvents()).extracting(OpsEvent::type).containsExactly(
+                OpsEvent.Type.SUMMARY_FALLBACK, OpsEvent.Type.RECOVERY_LATE_SEND, OpsEvent.Type.RECOVERY_RESEND);
+    }
+
+    @Test
+    void 발송을_시작하지_않은_회차를_복구하면_중복_발송_알림을_보내지_않는다() {
+        collected(backend, "로그인 API 추가");
+        preparer.prepareCycle(CYCLE);   // READY까지 저장, 발송 선점 전에 멈춤 (준비 중에 멈춘 경우는 위 즉석 fallback 테스트가 본다)
+
+        clock.set(kst(9, 5));
+        recovery.recover();
+
+        assertThat(cycleDigest(CYCLE).getStatus()).isEqualTo(DigestStatus.SENT);
+        assertThat(opsEvents()).extracting(OpsEvent::type).doesNotContain(OpsEvent.Type.RECOVERY_RESEND);
     }
 
     @Test
