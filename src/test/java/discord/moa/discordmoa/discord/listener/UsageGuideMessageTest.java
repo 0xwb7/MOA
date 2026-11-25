@@ -54,7 +54,7 @@ class UsageGuideMessageTest {
                 🛠 내 설정 상태
                 ✅ 팀 채팅방: '1팀'
                 ✅ GitHub 연동: alice
-                ✅ 등록된 레포: 2개
+                ✅ 팀에 등록된 레포: 2개
 
                 💡 개발자 사용법
                 • `/연동 github:<아이디>`: 내 GitHub 계정을 Discord 계정과 연결해요. PM의 질문 알림을 받으려면 필요해요
@@ -74,7 +74,7 @@ class UsageGuideMessageTest {
         assertThat(text).contains("""
                 ✅ 팀 채팅방: '1팀'
                 ❌ GitHub 연동 안 됨 → `/연동 github:<아이디>`
-                ❌ 등록된 레포 없음 → `/레포등록 url:<레포 주소>`
+                ❌ 팀에 등록된 레포 없음 → `/레포등록 url:<레포 주소>`
                 """)
                 .doesNotContain("질문 알림");   // 질문 버튼이 꺼져 있으면 그 설명은 뺀다
     }
@@ -89,7 +89,7 @@ class UsageGuideMessageTest {
                 팀 채팅방에서 실행하면 팀 설정 상태도 보여줘요
                 """)
                 .contains("💡 개발자 사용법")
-                .doesNotContain("✅ 팀 채팅방", "등록된 레포:", "등록된 레포 없음", "다음 발송", "PM 안내");
+                .doesNotContain("✅ 팀 채팅방", "팀에 등록된 레포:", "팀에 등록된 레포 없음", "다음 발송", "PM 안내");
     }
 
     @Test

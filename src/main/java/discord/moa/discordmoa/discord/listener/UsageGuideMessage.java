@@ -68,9 +68,9 @@ final class UsageGuideMessage {
         if (!guide.teamChannel()) {
             text.append(NOT_TEAM_CHANNEL).append('\n');
         } else if (guide.activeRepoCount() > 0) {
-            text.append("✅ 등록된 레포: ").append(guide.activeRepoCount()).append("개\n");
+            text.append("✅ 팀에 등록된 레포: ").append(guide.activeRepoCount()).append("개\n");
         } else {
-            text.append("❌ 등록된 레포 없음 → `/레포등록 url:<레포 주소>`\n");
+            text.append("❌ 팀에 등록된 레포 없음 → `/레포등록 url:<레포 주소>`\n");
         }
     }
 
