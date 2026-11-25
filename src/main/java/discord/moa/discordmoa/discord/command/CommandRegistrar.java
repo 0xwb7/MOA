@@ -35,9 +35,10 @@ public class CommandRegistrar {
                         Commands.slash("레포등록", "팀 GitHub 레포를 등록해요 (팀 채팅방에서 실행)")
                                 .addOption(OptionType.STRING, "url", "레포 주소 (예: https://github.com/owner/repo)", true),
 
-                        Commands.slash("레포해제", "이 팀의 GitHub 레포 등록을 해제해요 (팀 채팅방에서 실행)")
+                        Commands.slash("레포해제", "이 팀의 GitHub 레포 등록을 해제해요 (운영진 전용, 팀 채팅방에서 실행)")
                                 .addOptions(new OptionData(OptionType.STRING, "repo",
-                                        "해제할 레포 (목록에서 고르거나 owner/repo·주소 입력)", true, true)),
+                                        "해제할 레포 (목록에서 고르거나 owner/repo·주소 입력)", true, true))
+                                .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER)),
 
                         Commands.slash("레포목록", "이 팀에 등록된 GitHub 레포를 보여줘요 (팀 채팅방에서 실행)"),
 

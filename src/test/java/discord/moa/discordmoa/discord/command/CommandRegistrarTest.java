@@ -57,6 +57,18 @@ class CommandRegistrarTest {
 
     @Test
     void 사용법은_권한_제한_없이_누구나_쓸_수_있게_등록한다() {
+        assertThat(registeredCommand("사용법").getDefaultPermissions())
+                .isEqualTo(net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions.ENABLED);
+    }
+
+    @Test
+    void 레포해제는_운영진_전용으로_등록한다() {
+        assertThat(registeredCommand("레포해제").getDefaultPermissions())
+                .isEqualTo(net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions.enabledFor(
+                        net.dv8tion.jda.api.Permission.MANAGE_SERVER));
+    }
+
+    private net.dv8tion.jda.api.interactions.commands.build.CommandData registeredCommand(String name) {
         Guild guild = mock(Guild.class);
         CommandListUpdateAction update = mock(CommandListUpdateAction.class, RETURNS_SELF);
         when(jda.getGuildById(GUILD_ID)).thenReturn(guild);
@@ -65,16 +77,12 @@ class CommandRegistrarTest {
         new CommandRegistrar(jda, String.valueOf(GUILD_ID));
 
         // addCommands(CommandData...)에 넘긴 명령어 전체 (가변 인자를 펼쳐서 본다)
-        java.util.List<net.dv8tion.jda.api.interactions.commands.build.CommandData> commands =
-                org.mockito.Mockito.mockingDetails(update).getInvocations().stream()
-                        .filter(invocation -> invocation.getMethod().getName().equals("addCommands"))
-                        .flatMap(invocation -> java.util.Arrays.stream(invocation.getArguments()))
-                        .map(net.dv8tion.jda.api.interactions.commands.build.CommandData.class::cast)
-                        .toList();
-        assertThat(commands)
-                .filteredOn(command -> command.getName().equals("사용법"))
-                .singleElement()
-                .satisfies(command -> assertThat(command.getDefaultPermissions())
-                        .isEqualTo(net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions.ENABLED));
+        return org.mockito.Mockito.mockingDetails(update).getInvocations().stream()
+                .filter(invocation -> invocation.getMethod().getName().equals("addCommands"))
+                .flatMap(invocation -> java.util.Arrays.stream(invocation.getArguments()))
+                .map(net.dv8tion.jda.api.interactions.commands.build.CommandData.class::cast)
+                .filter(command -> command.getName().equals(name))
+                .findFirst()
+                .orElseThrow();
     }
 }

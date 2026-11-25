@@ -127,7 +127,7 @@ class TrackedRepoLifecycleTest {
 
     @Test
     void 해제한_레포는_수집_정기_회차_판단_목록_자동완성에서_빠진다() {
-        RepoDeactivation result = service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice");
+        RepoDeactivation result = service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice", true);
 
         assertThat(result).isEqualTo(new RepoDeactivation("1팀", "team1/backend", 0));
         TrackedRepo deactivated = reload(backend);
@@ -151,8 +151,8 @@ class TrackedRepoLifecycleTest {
 
     @Test
     void 마지막_레포를_해제한_팀은_정기_회차_대상에서_빠진다() {
-        service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice");
-        service.deactivate(CHANNEL_ID, "https://github.com/Team1/Frontend", 7L, "alice");   // 주소, 대소문자 무관
+        service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice", true);
+        service.deactivate(CHANNEL_ID, "https://github.com/Team1/Frontend", 7L, "alice", true);   // 주소, 대소문자 무관
 
         assertThat(teamRepository.findAllWithTrackedRepo()).extracting(Team::getName).containsExactly("2팀");
         assertThat(teamRepository.findAllForSendCycle(NOW)).extracting(Team::getName).containsExactly("2팀");
@@ -162,8 +162,23 @@ class TrackedRepoLifecycleTest {
     }
 
     @Test
+    void 운영진이_아니면_해제를_거절하고_레포와_배치는_그대로_둔다() {
+        ChangeBatch pending = changeBatchRepository.save(new ChangeBatch(backend, OLD_CURSOR, "b".repeat(40), NOW,
+                false, false, List.of(), List.of()));
+
+        assertThatThrownBy(() -> service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice", false))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("레포 해제는 운영진에게 요청해 주세요.");
+
+        assertThat(reload(backend).isActive()).isTrue();
+        assertThat(changeBatchRepository.findById(pending.getId()).orElseThrow().getStatus())
+                .isEqualTo(ChangeBatchStatus.COLLECTED);
+        verifyNoInteractions(opsNotifier);
+    }
+
+    @Test
     void 다른_팀의_레포는_해제할_수_없다() {
-        assertThatThrownBy(() -> service.deactivate(CHANNEL_ID, "team2/app", 7L, "alice"))
+        assertThatThrownBy(() -> service.deactivate(CHANNEL_ID, "team2/app", 7L, "alice", true))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("다른 팀에 등록된 레포라 해제할 수 없어요");
 
@@ -173,15 +188,15 @@ class TrackedRepoLifecycleTest {
 
     @Test
     void 이_팀에_없거나_이미_해제한_레포는_목록_안내와_함께_거절한다() {
-        service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice");
+        service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice", true);
 
-        assertThatThrownBy(() -> service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice"))
+        assertThatThrownBy(() -> service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice", true))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("이 팀에 등록된 레포 중에 team1/backend 가 없어요");
-        assertThatThrownBy(() -> service.deactivate(CHANNEL_ID, "nobody/unknown", 7L, "alice"))
+        assertThatThrownBy(() -> service.deactivate(CHANNEL_ID, "nobody/unknown", 7L, "alice", true))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("/레포목록");
-        assertThatThrownBy(() -> service.deactivate(CHANNEL_ID, "레포 이름 아님", 7L, "alice"))
+        assertThatThrownBy(() -> service.deactivate(CHANNEL_ID, "레포 이름 아님", 7L, "alice", true))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -193,7 +208,7 @@ class TrackedRepoLifecycleTest {
         ChangeBatch sent = batch(backend, ChangeBatchStatus.SENT, 1);
         ChangeBatch otherRepo = batch(frontend, ChangeBatchStatus.COLLECTED, 1);
 
-        RepoDeactivation result = service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice");
+        RepoDeactivation result = service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice", true);
 
         assertThat(result.discardedCommitCount()).isEqualTo(5);   // 버린 배치의 커밋 수
         assertThat(status(collected)).isEqualTo(ChangeBatchStatus.DISCARDED);
@@ -207,7 +222,7 @@ class TrackedRepoLifecycleTest {
 
     @Test
     void 보낼_변경이_없던_레포를_해제하면_버린_변경은_0건이다() {
-        assertThat(service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice").discardedCommitCount()).isZero();
+        assertThat(service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice", true).discardedCommitCount()).isZero();
     }
 
     @Test
@@ -235,7 +250,7 @@ class TrackedRepoLifecycleTest {
 
     @Test
     void 해제하면_누가_어느_팀의_어느_레포를_해제했는지_운영_알림을_보낸다() {
-        service.deactivate(CHANNEL_ID, "team1/backend", 77L, "alice");
+        service.deactivate(CHANNEL_ID, "team1/backend", 77L, "alice", true);
 
         ArgumentCaptor<OpsEvent> captor = ArgumentCaptor.forClass(OpsEvent.class);
         verify(opsNotifier).notify(captor.capture());
@@ -250,7 +265,7 @@ class TrackedRepoLifecycleTest {
 
     @Test
     void 같은_팀이_해제한_레포를_다시_등록하면_활성화하고_커서를_지금으로_초기화한다() {
-        service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice");
+        service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice", true);
         clock.set(NOW.plus(Duration.ofHours(5)));
         givenInstalled("team1", "backend", 1L, 777L);
 
@@ -271,7 +286,7 @@ class TrackedRepoLifecycleTest {
 
     @Test
     void 다시_등록하면_해제돼_있던_동안_남은_COLLECTED를_보내지_않는다() {
-        service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice");
+        service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice", true);
         ChangeBatch revertedAfterDeactivation = batch(backend, ChangeBatchStatus.COLLECTED, 1);
         givenInstalled("team1", "backend", 1L, INSTALLATION_ID);
 
@@ -282,7 +297,7 @@ class TrackedRepoLifecycleTest {
 
     @Test
     void 다른_팀이_해제된_레포를_등록하면_그_팀으로_옮기고_커서를_초기화한다() {
-        service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice");
+        service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice", true);
         givenInstalled("team1", "backend", 1L, INSTALLATION_ID);
 
         RepoRegistration registration = service.register(OTHER_CHANNEL_ID, "https://github.com/team1/backend");
@@ -374,7 +389,7 @@ class TrackedRepoLifecycleTest {
 
     @Test
     void 자동완성_후보는_그_채널_팀의_활성_레포만이다() {
-        service.deactivate(CHANNEL_ID, "team1/frontend", 7L, "alice");
+        service.deactivate(CHANNEL_ID, "team1/frontend", 7L, "alice", true);
 
         assertThat(service.autocompleteCandidates(CHANNEL_ID, "")).containsExactly("team1/backend");
         assertThat(service.autocompleteCandidates(CHANNEL_ID, "BACK")).containsExactly("team1/backend");

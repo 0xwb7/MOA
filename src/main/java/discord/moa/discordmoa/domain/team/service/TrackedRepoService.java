@@ -23,6 +23,9 @@ import java.util.OptionalInt;
 @Service
 public class TrackedRepoService {
 
+    static final String ADMIN_ONLY_DEACTIVATE = "레포 해제는 운영진에게 요청해 주세요.";
+
+
     static final int MAX_AUTOCOMPLETE_CHOICES = 25;   // Discord 자동완성 후보 최대 개수
     static final int MAX_CHOICE_LENGTH = 100;          // Discord 자동완성 후보 이름·값 최대 길이
 
@@ -155,10 +158,15 @@ public class TrackedRepoService {
      * /레포해제: 이 채널 팀의 활성 레포만 비활성화하고, 아직 회차에 담기지 않은 배치(COLLECTED)는 버린다.
      * 이미 회차에 담긴 배치(PREPARED)는 그대로 발송된다.
      * GitHub를 부르지 않는다 (삭제됐거나 접근이 끊긴 레포도 해제할 수 있게).
+     * 운영진(서버 관리 권한)만 해제할 수 있다. Discord 서버 설정에서 명령어 권한을 바꿀 수 있어 여기서도 확인한다.
      *
-     * @param input "owner/repo" 또는 GitHub 주소
+     * @param input        "owner/repo" 또는 GitHub 주소
+     * @param actorIsAdmin 실행자에게 서버 관리 권한이 있는지 (Discord 쪽에서 확인해 넘긴다)
      */
-    public RepoDeactivation deactivate(Long channelId, String input, long actorId, String actorName) {
+    public RepoDeactivation deactivate(Long channelId, String input, long actorId, String actorName, boolean actorIsAdmin) {
+        if (!actorIsAdmin) {
+            throw new IllegalStateException(ADMIN_ONLY_DEACTIVATE);
+        }
         Team team = teamRepository.findByDiscordChannelId(channelId)
                 .orElseThrow(() -> new IllegalStateException(
                         "팀 채팅방에서만 레포를 해제할 수 있어요. 이 채널이 팀으로 등록돼 있는지 운영진에게 확인해 주세요."));

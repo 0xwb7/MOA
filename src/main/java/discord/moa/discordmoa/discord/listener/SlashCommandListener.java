@@ -22,6 +22,7 @@ import discord.moa.discordmoa.domain.team.service.TeamService;
 import discord.moa.discordmoa.domain.team.service.TrackedRepoService;
 import discord.moa.discordmoa.global.config.DiscordTaskConfig;
 import lombok.extern.slf4j.Slf4j;
+import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.Permission;
 import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.events.interaction.command.CommandAutoCompleteInteractionEvent;
@@ -229,7 +230,7 @@ public class SlashCommandListener extends ListenerAdapter {
         long channelId = event.getChannel().getIdLong();
         try {
             RepoDeactivation result = trackedRepoService.deactivate(channelId, input,
-                    event.getUser().getIdLong(), event.getUser().getName());
+                    event.getUser().getIdLong(), event.getUser().getName(), isAdmin(event.getMember()));
             event.reply(describeDeactivation(result)).setEphemeral(true).queue();
         } catch (IllegalArgumentException | IllegalStateException e) {
             event.reply("⚠️ " + e.getMessage()).setEphemeral(true).queue();
@@ -237,6 +238,13 @@ public class SlashCommandListener extends ListenerAdapter {
             log.error("레포 해제 중 오류: input={}, channelId={}", input, channelId, e);
             event.reply(UNEXPECTED_ERROR).setEphemeral(true).queue();
         }
+    }
+
+    /**
+     * 운영진(서버 관리 권한) 여부. 명령어 기본 권한은 서버 설정에서 바꿀 수 있어 실행할 때 다시 확인한다.
+     */
+    static boolean isAdmin(Member member) {
+        return member != null && member.hasPermission(Permission.MANAGE_SERVER);
     }
 
     private void handleRepoList(SlashCommandInteractionEvent event) {
