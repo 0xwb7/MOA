@@ -123,6 +123,20 @@ class TrackedRepoLifecycleTest {
         teamRepository.deleteAllInBatch();
     }
 
+    // ---- 전체 목록 ----
+
+    @Test
+    void 전체_목록은_팀과_활성_레포를_등록_순서로_모으고_레포_없는_팀도_넣는다() {
+        trackedRepoRepository.save(new TrackedRepo(team, 4L, "team1/docs", "main", OLD_CURSOR, INSTALLATION_ID));
+        teamRepository.save(new Team("3팀", 300L, 9L));
+        service.deactivate(CHANNEL_ID, "team1/backend", 7L, "alice", true);
+
+        assertThat(service.listAllActiveByTeam()).containsExactly(
+                new TrackedRepoService.TeamRepos("1팀", CHANNEL_ID, List.of("team1/frontend", "team1/docs")),
+                new TrackedRepoService.TeamRepos("2팀", OTHER_CHANNEL_ID, List.of("team2/app")),
+                new TrackedRepoService.TeamRepos("3팀", 300L, List.of()));
+    }
+
     // ---- 해제 ----
 
     @Test

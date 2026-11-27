@@ -15,6 +15,7 @@ import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import net.dv8tion.jda.api.events.interaction.command.CommandAutoCompleteInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.interactions.commands.Command;
+import net.dv8tion.jda.api.requests.RestAction;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
@@ -26,11 +27,13 @@ import static discord.moa.discordmoa.discord.listener.CommandSupport.UNEXPECTED_
 import static discord.moa.discordmoa.discord.listener.CommandSupport.runLong;
 
 /**
- * 팀과 레포 설정: /팀등록, /레포등록, /레포해제(+자동완성), /레포목록.
+ * 팀과 레포 설정: /팀등록, /레포등록, /레포해제(+자동완성), /레포목록, /레포전체목록.
  */
 @Slf4j
 @Component
 class TeamCommandHandler implements SlashCommandHandler {
+
+    static final String ADMIN_ONLY = "운영진만 사용할 수 있어요";
 
     private final TeamService teamService;
     private final TrackedRepoService trackedRepoService;
@@ -50,6 +53,7 @@ class TeamCommandHandler implements SlashCommandHandler {
             case "레포등록" -> handleRepoRegister(event);
             case "레포해제" -> handleRepoUnregister(event);
             case "레포목록" -> handleRepoList(event);
+            case "레포전체목록" -> handleAllRepoList(event);
             default -> {
                 return false;
             }
@@ -187,6 +191,31 @@ class TeamCommandHandler implements SlashCommandHandler {
             log.error("레포 목록 조회 중 오류: channelId={}", channelId, e);
             event.reply(UNEXPECTED_ERROR).setEphemeral(true).queue();
         }
+    }
+
+    /**
+     * 운영진 전용. 레포 주소가 일반 채널에 보이지 않게 모두 에페메럴로 답한다.
+     * DB만 읽으므로 이벤트 스레드에서 바로 답하고, 2000자를 넘으면 이어지는 메시지를 순서대로 보낸다.
+     */
+    private void handleAllRepoList(SlashCommandInteractionEvent event) {
+        if (!isAdmin(event.getMember())) {
+            event.reply(ADMIN_ONLY).setEphemeral(true).queue();
+            return;
+        }
+        List<String> messages;
+        try {
+            messages = AllRepoListMessage.format(trackedRepoService.listAllActiveByTeam());
+        } catch (RuntimeException e) {
+            log.error("전체 레포 목록 조회 중 오류", e);
+            event.reply(UNEXPECTED_ERROR).setEphemeral(true).queue();
+            return;
+        }
+        RestAction<?> chain = event.reply(messages.getFirst()).setEphemeral(true).setAllowedMentions(List.of());
+        for (String message : messages.subList(1, messages.size())) {
+            chain = chain.flatMap(previous -> event.getHook().sendMessage(message)
+                    .setEphemeral(true).setAllowedMentions(List.of()));
+        }
+        chain.queue();
     }
 
     /**

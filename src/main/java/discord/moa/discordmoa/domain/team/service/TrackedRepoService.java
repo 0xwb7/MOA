@@ -11,12 +11,16 @@ import discord.moa.discordmoa.github.dto.GitHubRepo;
 import discord.moa.discordmoa.github.dto.RepoAddress;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 
@@ -206,6 +210,22 @@ public class TrackedRepoService {
     }
 
     /**
+     * /레포전체목록: 모든 팀(등록 순서)과 각 팀의 활성 레포 이름(등록 순서). 활성 레포가 없는 팀도 빈 목록으로 넣는다.
+     * 팀 수와 상관없이 팀 조회 한 번, 레포 조회 한 번으로 끝낸다.
+     */
+    public List<TeamRepos> listAllActiveByTeam() {
+        Map<Long, List<String>> reposByTeam = new HashMap<>();
+        for (TrackedRepo repo : trackedRepoRepository.findAllByActiveTrueOrderByIdAsc()) {
+            // team은 LAZY 프록시지만 id만 읽으므로 추가 조회가 없다
+            reposByTeam.computeIfAbsent(repo.getTeam().getId(), id -> new ArrayList<>()).add(repo.getFullName());
+        }
+        return teamRepository.findAll(Sort.by("id")).stream()
+                .map(team -> new TeamRepos(team.getName(), team.getDiscordChannelId(),
+                        List.copyOf(reposByTeam.getOrDefault(team.getId(), List.of()))))
+                .toList();
+    }
+
+    /**
      * /레포해제 자동완성 후보: 이 채널 팀의 활성 레포 fullName 중 입력한 글자를 포함하는 것.
      * 팀 채널이 아니면 후보가 없다.
      */
@@ -242,5 +262,8 @@ public class TrackedRepoService {
     }
 
     public record RepoList(String teamName, List<TrackedRepo> repos) {
+    }
+
+    public record TeamRepos(String teamName, long channelId, List<String> repoFullNames) {
     }
 }

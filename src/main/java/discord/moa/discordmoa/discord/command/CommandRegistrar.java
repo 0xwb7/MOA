@@ -42,6 +42,9 @@ public class CommandRegistrar {
 
                         Commands.slash("레포목록", "이 팀에 등록된 GitHub 레포를 보여줘요 (팀 채팅방에서 실행)"),
 
+                        Commands.slash("레포전체목록", "모든 팀의 등록된 GitHub 레포를 보여줘요 (운영진 전용)")
+                                .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER)),
+
                         Commands.slash("수집테스트", "이 채널 팀의 레포 변경을 지금 수집해요 (운영진 전용)")
                                 .setDefaultPermissions(DefaultMemberPermissions.enabledFor(Permission.MANAGE_SERVER)),
 

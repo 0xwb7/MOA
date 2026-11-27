@@ -68,6 +68,13 @@ class CommandRegistrarTest {
                         net.dv8tion.jda.api.Permission.MANAGE_SERVER));
     }
 
+    @Test
+    void 레포전체목록은_운영진_전용으로_등록한다() {
+        assertThat(registeredCommand("레포전체목록").getDefaultPermissions())
+                .isEqualTo(net.dv8tion.jda.api.interactions.commands.DefaultMemberPermissions.enabledFor(
+                        net.dv8tion.jda.api.Permission.MANAGE_SERVER));
+    }
+
     private net.dv8tion.jda.api.interactions.commands.build.CommandData registeredCommand(String name) {
         Guild guild = mock(Guild.class);
         CommandListUpdateAction update = mock(CommandListUpdateAction.class, RETURNS_SELF);

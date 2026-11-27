@@ -24,6 +24,9 @@ public interface TrackedRepoRepository extends JpaRepository<TrackedRepo, Long> 
 
     List<TrackedRepo> findAllByTeamIdAndActiveTrueOrderByIdAsc(Long teamId);
 
+    // /레포전체목록: 모든 팀의 활성 레포를 한 번에 (팀마다 조회하지 않는다)
+    List<TrackedRepo> findAllByActiveTrueOrderByIdAsc();
+
     @EntityGraph(attributePaths = "team")
     List<TrackedRepo> findAllByFullNameIgnoreCaseAndActiveTrue(String fullName);
 
